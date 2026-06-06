@@ -13,7 +13,10 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        // Sanctum SPA (cookie mode): prepend EnsureFrontendRequestsAreStateful to
+        // the "api" group so first-party requests coming from a stateful domain
+        // receive the session + CSRF protection instead of bearer-token auth.
+        $middleware->statefulApi();
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

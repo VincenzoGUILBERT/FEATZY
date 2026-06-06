@@ -17,9 +17,14 @@ return [
 
     'paths' => ['api/*', 'sanctum/csrf-cookie'],
 
-    'allowed_methods' => ['*'],
+    'allowed_methods' => ['POST', 'GET', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 
-    'allowed_origins' => ['*'],
+    // SPA cookie auth requires explicit origins: the CORS spec forbids the '*'
+    // wildcard once credentials (cookies) are allowed. Driven by FRONTEND_URL
+    // (comma-separated for multiple SPA origins).
+    'allowed_origins' => array_filter(
+        explode(',', (string) env('FRONTEND_URL', 'http://localhost:5173'))
+    ),
 
     'allowed_origins_patterns' => [],
 
@@ -29,6 +34,6 @@ return [
 
     'max_age' => 0,
 
-    'supports_credentials' => false,
+    'supports_credentials' => true,
 
 ];

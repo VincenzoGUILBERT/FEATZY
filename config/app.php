@@ -56,6 +56,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Frontend (SPA) URL
+    |--------------------------------------------------------------------------
+    |
+    | Base URL of the separate Vite/React SPA. Used to build the links embedded
+    | in transactional emails (password reset, email verification) so they open
+    | the SPA rather than a (non-existent) server-rendered page.
+    |
+    */
+
+    'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Timezone
     |--------------------------------------------------------------------------
     |
