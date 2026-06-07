@@ -4,6 +4,7 @@ use App\Http\Controllers\Account\ProfileController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\EmailVerificationController;
 use App\Http\Controllers\Auth\PasswordController;
+use App\Http\Controllers\Availability\AvailabilityController;
 use App\Http\Controllers\Menu\MenuCategoryController;
 use App\Http\Controllers\Menu\MenuItemController;
 use App\Http\Controllers\Menu\MenuItemMediaController;
@@ -28,6 +29,9 @@ Route::post('/email/verification-notification', [EmailVerificationController::cl
 Route::get('/email/verify/{id}/{hash}', [EmailVerificationController::class, 'verify'])
     ->middleware('throttle:6,1')
     ->name('verification.verify');
+
+Route::get('/restaurants/{restaurant}/availabilities', [AvailabilityController::class, 'index'])
+    ->name('availabilities.index');
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', [AuthController::class, 'user'])->name('user.current');
@@ -120,4 +124,7 @@ Route::middleware('auth:sanctum')->group(function () {
         ->middleware('can:update,scheduleException')->name('schedule-exceptions.update');
     Route::delete('/schedule-exceptions/{scheduleException}', [ScheduleExceptionController::class, 'destroy'])
         ->middleware('can:delete,scheduleException')->name('schedule-exceptions.destroy');
+
+    Route::post('/restaurants/{restaurant}/availabilities/generate', [AvailabilityController::class, 'generate'])
+        ->middleware('can:update,restaurant')->name('availabilities.generate');
 });
