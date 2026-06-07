@@ -16,11 +16,7 @@ class ProfileController extends Controller
     public function update(UpdateProfileRequest $request): UserResource
     {
         $user = $request->user();
-        $user->update([
-            'first_name' => $request->validated('first_name'),
-            'last_name' => $request->validated('last_name'),
-            'phone' => $request->validated('phone'),
-        ]);
+        $user->update($request->validated());
 
         return UserResource::make($user->load('roles'));
     }
