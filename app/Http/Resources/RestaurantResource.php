@@ -38,6 +38,7 @@ class RestaurantResource extends JsonResource
             'status' => $this->status->value,
             'average_rating' => $this->average_rating !== null ? (float) $this->average_rating : null,
             'reviews_count' => $this->reviews_count,
+            'is_favorited' => $this->whenHas('is_favorited', fn (): bool => (bool) $this->is_favorited),
             'cuisine_types' => CuisineTypeResource::collection($this->whenLoaded('cuisineTypes')),
             'media' => [
                 'logo' => $this->getFirstMediaUrl('logo') ?: null,

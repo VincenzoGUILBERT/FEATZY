@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\PriceLevel;
 use App\Enums\RestaurantStatus;
 use Database\Factories\RestaurantFactory;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -45,6 +46,33 @@ class Restaurant extends Model implements HasMedia
         $this->addMediaCollection('logo')->singleFile();
         $this->addMediaCollection('cover')->singleFile();
         $this->addMediaCollection('gallery');
+    }
+
+    /**
+     * @param  Builder<Restaurant>  $query
+     */
+    public function scopePublished(Builder $query): void
+    {
+        $query->where('status', RestaurantStatus::Published->value);
+    }
+
+    /**
+     * Restrict to restaurants within $radiusKm of a point and expose a `distance`
+     * (km) column for sorting; restaurants without coordinates are excluded.
+     *
+     * @param  Builder<Restaurant>  $query
+     */
+    public function scopeNearby(Builder $query, float $latitude, float $longitude, ?float $radiusKm = null): void
+    {
+        $haversine = '(6371 * acos(least(1.0, cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))))';
+
+        $query->whereNotNull('latitude')
+            ->whereNotNull('longitude')
+            ->selectRaw("restaurants.*, {$haversine} as distance", [$latitude, $longitude, $latitude]);
+
+        if ($radiusKm !== null) {
+            $query->whereRaw("{$haversine} <= ?", [$latitude, $longitude, $latitude, $radiusKm]);
+        }
     }
 
     public function owner(): BelongsTo

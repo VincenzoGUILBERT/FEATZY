@@ -5,6 +5,8 @@ use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\EmailVerificationController;
 use App\Http\Controllers\Auth\PasswordController;
 use App\Http\Controllers\Availability\AvailabilityController;
+use App\Http\Controllers\Discovery\FavoriteController;
+use App\Http\Controllers\Discovery\RestaurantDiscoveryController;
 use App\Http\Controllers\Menu\MenuCategoryController;
 use App\Http\Controllers\Menu\MenuItemController;
 use App\Http\Controllers\Menu\MenuItemMediaController;
@@ -33,7 +35,18 @@ Route::get('/email/verify/{id}/{hash}', [EmailVerificationController::class, 've
 Route::get('/restaurants/{restaurant}/availabilities', [AvailabilityController::class, 'index'])
     ->name('availabilities.index');
 
+Route::get('/discovery/restaurants', [RestaurantDiscoveryController::class, 'index'])
+    ->name('discovery.restaurants.index');
+Route::get('/discovery/restaurants/{restaurant}', [RestaurantDiscoveryController::class, 'show'])
+    ->name('discovery.restaurants.show');
+Route::get('/discovery/restaurants/{restaurant}/menu', [RestaurantDiscoveryController::class, 'menu'])
+    ->name('discovery.restaurants.menu');
+
 Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/me/favorites', [FavoriteController::class, 'index'])->name('favorites.index');
+    Route::put('/restaurants/{restaurant}/favorite', [FavoriteController::class, 'store'])->name('favorites.store');
+    Route::delete('/restaurants/{restaurant}/favorite', [FavoriteController::class, 'destroy'])->name('favorites.destroy');
+
     Route::get('/user', [AuthController::class, 'user'])->name('user.current');
 
     Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
