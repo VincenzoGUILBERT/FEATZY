@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Account\ProfileController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\EmailVerificationController;
 use App\Http\Controllers\Auth\PasswordController;
@@ -24,4 +25,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 
+    Route::patch('/me', [ProfileController::class, 'update'])->name('profile.update');
+    Route::put('/me/password', [ProfileController::class, 'updatePassword'])->name('password.change');
+    Route::delete('/me', [ProfileController::class, 'destroy'])->name('account.destroy');
 });
