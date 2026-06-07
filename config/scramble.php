@@ -1,6 +1,7 @@
 <?php
 
 use Dedoc\Scramble\Http\Middleware\RestrictedDocsAccess;
+use Dedoc\Scramble\SecurityDocumentation\MiddlewareAuthSecurityStrategy;
 
 return [
     /*
@@ -159,6 +160,8 @@ return [
      *     ],
      * ],
      */
-    // 'security_strategy' => \Dedoc\Scramble\SecurityDocumentation\MiddlewareAuthSecurityStrategy::class,
-    'security_strategy' => null,
+    // Routes behind `auth`/`auth:*` (e.g. `auth:sanctum`) get a global bearer
+    // scheme, so the docs "Try It" shows an Authorization field. Public routes
+    // are marked `security: []`.
+    'security_strategy' => MiddlewareAuthSecurityStrategy::class,
 ];
