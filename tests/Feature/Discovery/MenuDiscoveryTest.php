@@ -29,7 +29,9 @@ it('returns the active menu tree of a published restaurant', function () {
         ->assertJsonPath('data.0.menu_items.0.name', 'Burger')
         ->assertJsonPath('data.0.menu_items.0.option_groups.0.name', 'Cuisson')
         ->assertJsonPath('data.0.menu_items.0.option_groups.0.options.0.name', 'Saignant')
-        ->assertJsonPath('data.0.menu_items.0.allergens.0.name', 'Gluten');
+        ->assertJsonPath('data.0.menu_items.0.allergens.0.name', 'Gluten')
+        // The admin-only usage count must never leak into the public payload.
+        ->assertJsonMissingPath('data.0.menu_items.0.allergens.0.menu_items_count');
 });
 
 it('hides inactive categories and unavailable items', function () {

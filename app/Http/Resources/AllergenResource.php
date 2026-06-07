@@ -21,6 +21,7 @@ class AllergenResource extends JsonResource
             'name' => $this->name,
             'icon' => $this->icon,
             'position' => $this->position,
+            'menu_items_count' => $this->whenCounted('menuItems'),
         ];
     }
 }

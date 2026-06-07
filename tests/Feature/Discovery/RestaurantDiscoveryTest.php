@@ -59,7 +59,9 @@ it('filters by cuisine type', function () {
     $this->getJson("/api/discovery/restaurants?filter[cuisine]={$cuisine->id}")
         ->assertOk()
         ->assertJsonCount(1, 'data')
-        ->assertJsonPath('data.0.id', $matching->id);
+        ->assertJsonPath('data.0.id', $matching->id)
+        // The admin-only usage count must never leak into the public payload.
+        ->assertJsonMissingPath('data.0.cuisine_types.0.restaurants_count');
 });
 
 it('filters by minimum rating', function () {
