@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Enums\UserRole;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Facades\Hash;
@@ -43,5 +44,40 @@ class UserFactory extends Factory
         return $this->state(fn (array $attributes) => [
             'email_verified_at' => null,
         ]);
+    }
+
+    /**
+     * Assign the client role after creation. Requires the roles to be seeded
+     * (RoleSeeder), which the test suite does globally for Feature tests.
+     */
+    public function client(): static
+    {
+        return $this->withRole(UserRole::Client);
+    }
+
+    /**
+     * Assign the restaurateur role after creation.
+     */
+    public function restaurateur(): static
+    {
+        return $this->withRole(UserRole::Restaurateur);
+    }
+
+    /**
+     * Assign the admin role after creation.
+     */
+    public function admin(): static
+    {
+        return $this->withRole(UserRole::Admin);
+    }
+
+    /**
+     * Assign the given role to the user once it has been persisted.
+     */
+    private function withRole(UserRole $role): static
+    {
+        return $this->afterCreating(function (User $user) use ($role): void {
+            $user->assignRole($role->value);
+        });
     }
 }
