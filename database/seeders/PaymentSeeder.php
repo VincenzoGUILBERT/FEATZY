@@ -125,7 +125,7 @@ class PaymentSeeder extends Seeder
 
         if ($isCompleted) {
             // Réservation honorée : le paiement est encaissé.
-            $paidAt = $reservation->completed_at ?? Carbon::parse($reservation->reservation_date)->setTime(21, 0);
+            $paidAt = $reservation->completed_at ?? $reservation->reserved_at->copy()->setTime(21, 0);
 
             $attributes['status'] = PaymentStatus::Paid;
             $attributes['paid_at'] = $paidAt;

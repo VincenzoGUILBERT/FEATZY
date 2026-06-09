@@ -3,8 +3,7 @@
 namespace Database\Factories;
 
 use App\Enums\DayOfWeek;
-use App\Enums\ServiceType;
-use App\Models\Restaurant;
+use App\Models\Service;
 use App\Models\ServiceSchedule;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
@@ -20,23 +19,30 @@ class ServiceScheduleFactory extends Factory
      */
     public function definition(): array
     {
-        $serviceType = fake()->randomElement(ServiceType::cases());
-
-        [$startTime, $endTime] = $serviceType === ServiceType::Lunch
-            ? ['12:00:00', '14:30:00']
-            : ['19:00:00', '22:30:00'];
-
-        $capacity = fake()->numberBetween(20, 120);
-
         return [
-            'restaurant_id' => Restaurant::factory(),
+            'service_id' => Service::factory(),
             'day_of_week' => fake()->randomElement(DayOfWeek::cases()),
-            'service_type' => $serviceType,
-            'start_time' => $startTime,
-            'end_time' => $endTime,
-            'capacity' => $capacity,
-            'max_party_size' => fake()->numberBetween(2, min(12, $capacity)),
-            'is_active' => true,
+            'opens_at' => '12:00:00',
+            'last_seating_at' => '13:30:00',
+            'closes_at' => '15:00:00',
+            'crosses_midnight' => false,
         ];
+    }
+
+    public function onDay(DayOfWeek|int $day): static
+    {
+        return $this->state(fn (): array => [
+            'day_of_week' => $day instanceof DayOfWeek ? $day : DayOfWeek::from($day),
+        ]);
+    }
+
+    public function window(string $opensAt, string $lastSeatingAt, string $closesAt, bool $crossesMidnight = false): static
+    {
+        return $this->state(fn (): array => [
+            'opens_at' => $opensAt,
+            'last_seating_at' => $lastSeatingAt,
+            'closes_at' => $closesAt,
+            'crosses_midnight' => $crossesMidnight,
+        ]);
     }
 }

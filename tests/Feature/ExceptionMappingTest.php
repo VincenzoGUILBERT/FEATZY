@@ -1,17 +1,17 @@
 <?php
 
 use App\Exceptions\InvalidStatusTransitionException;
-use App\Exceptions\Reservation\CapacityExceededException;
+use App\Exceptions\Reservation\SlotUnavailableException;
 use Illuminate\Support\Facades\Route;
 
 it('renders a 409 domain exception as mapped JSON', function () {
-    Route::middleware('api')->get('/api/_test/capacity', function () {
-        throw new CapacityExceededException;
+    Route::middleware('api')->get('/api/_test/slot', function () {
+        throw new SlotUnavailableException;
     });
 
-    $this->getJson('/api/_test/capacity')
+    $this->getJson('/api/_test/slot')
         ->assertStatus(409)
-        ->assertJsonPath('code', 'CAPACITY_EXCEEDED')
+        ->assertJsonPath('code', 'SLOT_UNAVAILABLE')
         ->assertJsonStructure(['message', 'code']);
 });
 

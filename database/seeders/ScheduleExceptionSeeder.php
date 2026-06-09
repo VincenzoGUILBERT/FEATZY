@@ -2,10 +2,10 @@
 
 namespace Database\Seeders;
 
-use App\Enums\ServiceType;
+use App\Enums\ScheduleExceptionType;
 use App\Models\Restaurant;
 use App\Models\ScheduleException;
-use Carbon\CarbonImmutable;
+use App\Models\Service;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
@@ -13,13 +13,12 @@ use Illuminate\Support\Facades\DB;
 class ScheduleExceptionSeeder extends Seeder
 {
     /**
-     * 2026 French public holidays applied as full-day closures.
-     * service_type is left NULL so the whole day is closed.
+     * Jours fériés français 2026 appliqués comme fermetures journée entière.
+     * service_id reste NULL : la dérogation ferme tout le restaurant.
      *
      * @var array<string, string>
      */
     private array $publicHolidays = [
-        '2026-05-01' => 'Fête du Travail',
         '2026-07-14' => 'Fête nationale',
         '2026-08-15' => 'Assomption',
         '2026-11-01' => 'Toussaint',
@@ -28,12 +27,10 @@ class ScheduleExceptionSeeder extends Seeder
     ];
 
     /**
-     * Seed a curated, varied set of schedule exceptions across restaurants.
-     *
-     * Distribution:
-     *  - public-holiday full-day closures (shared by a few restaurants),
-     *  - summer vacation ("congés annuels") week-long closures,
-     *  - reduced-capacity overrides for high-demand special dates.
+     * Sème un jeu varié et déterministe de dérogations sur quelques restaurants :
+     *  - fermetures jours fériés (restaurant-wide, service_id null),
+     *  - horaires spéciaux sur un service précis,
+     *  - capacité réduite (capacity_override et/ou pacing_override) sur un service.
      */
     public function run(): void
     {
@@ -44,29 +41,27 @@ class ScheduleExceptionSeeder extends Seeder
         }
 
         $this->seedPublicHolidayClosures($restaurants);
-        $this->seedSummerVacationClosures($restaurants);
-        $this->seedReducedCapacityDates($restaurants);
+        $this->seedSpecialHours($restaurants);
+        $this->seedReducedCapacity($restaurants);
     }
 
     /**
-     * Close a handful of restaurants on the major 2026 public holidays.
+     * Ferme les premiers restaurants sur les jours fériés majeurs (service_id null).
      *
      * @param  Collection<int, Restaurant>  $restaurants
      */
     private function seedPublicHolidayClosures(Collection $restaurants): void
     {
-        // Only the first few restaurants observe the bank-holiday closures so
-        // the dataset shows a mix of open and closed venues on those dates.
-        $observing = $restaurants->take(4);
-
-        foreach ($observing as $restaurant) {
+        // Seuls les premiers restaurants observent ces fermetures, pour qu'on ait un
+        // mélange de venues ouvertes et fermées à ces dates.
+        foreach ($restaurants->take(4) as $restaurant) {
             foreach ($this->publicHolidays as $date => $reason) {
                 $this->upsertException(
                     restaurant: $restaurant,
+                    service: null,
                     date: $date,
-                    serviceType: null,
+                    type: ScheduleExceptionType::Closed,
                     attributes: [
-                        'is_closed' => true,
                         'reason' => "Fermeture {$reason}",
                     ],
                 );
@@ -75,83 +70,90 @@ class ScheduleExceptionSeeder extends Seeder
     }
 
     /**
-     * Close two restaurants for their annual summer holidays.
+     * Applique des horaires spéciaux ciblés sur un service précis de quelques restaurants.
      *
      * @param  Collection<int, Restaurant>  $restaurants
      */
-    private function seedSummerVacationClosures(Collection $restaurants): void
+    private function seedSpecialHours(Collection $restaurants): void
     {
-        // First venue: classic August closing week.
-        $first = $restaurants->first();
+        // Brunch de fête : ouverture élargie sur le service déjeuner.
+        $specialDates = [
+            [
+                'date' => '2026-12-24',
+                'opens_at' => '11:00:00',
+                'last_seating_at' => '14:00:00',
+                'closes_at' => '15:30:00',
+                'reason' => 'Réveillon de Noël - service déjeuner prolongé',
+            ],
+            // Veille de jour férié : service écourté.
+            [
+                'date' => '2026-07-13',
+                'opens_at' => '12:00:00',
+                'last_seating_at' => '13:30:00',
+                'closes_at' => '15:00:00',
+                'reason' => 'Veille de fête nationale - service réduit',
+            ],
+        ];
 
-        if ($first !== null) {
-            foreach ($this->datesBetween('2026-08-03', '2026-08-09') as $date) {
-                $this->upsertException(
-                    restaurant: $first,
-                    date: $date,
-                    serviceType: null,
-                    attributes: [
-                        'is_closed' => true,
-                        'reason' => 'Congés annuels',
-                    ],
-                );
+        foreach ($restaurants->take(count($specialDates)) as $offset => $restaurant) {
+            $service = $this->firstActiveService($restaurant);
+
+            if ($service === null) {
+                continue;
             }
-        }
 
-        // A different venue: late-August closing week.
-        $second = $restaurants->skip(2)->first();
+            $override = $specialDates[$offset];
 
-        if ($second !== null && $second->isNot($first)) {
-            foreach ($this->datesBetween('2026-08-17', '2026-08-23') as $date) {
-                $this->upsertException(
-                    restaurant: $second,
-                    date: $date,
-                    serviceType: null,
-                    attributes: [
-                        'is_closed' => true,
-                        'reason' => 'Congés annuels',
-                    ],
-                );
-            }
+            $this->upsertException(
+                restaurant: $restaurant,
+                service: $service,
+                date: $override['date'],
+                type: ScheduleExceptionType::SpecialHours,
+                attributes: [
+                    'opens_at' => $override['opens_at'],
+                    'last_seating_at' => $override['last_seating_at'],
+                    'closes_at' => $override['closes_at'],
+                    'crosses_midnight' => false,
+                    'reason' => $override['reason'],
+                ],
+            );
         }
     }
 
     /**
-     * Apply reduced-capacity overrides on a few special / high-demand dates.
+     * Applique des dérogations de capacité réduite sur un service précis.
      *
      * @param  Collection<int, Restaurant>  $restaurants
      */
-    private function seedReducedCapacityDates(Collection $restaurants): void
+    private function seedReducedCapacity(Collection $restaurants): void
     {
         $reducedDates = [
-            // Valentine's Day dinner: full booking, smaller covers, no walk-ins.
+            // Saint-Valentin : menu spécial, salle bridée et cadence ralentie.
             [
                 'date' => '2026-02-14',
-                'service_type' => ServiceType::Dinner,
-                'capacity' => 24,
-                'max_party_size' => 4,
+                'capacity_override' => 24,
+                'pacing_override' => 4,
                 'reason' => 'Saint-Valentin - menu spécial à capacité réduite',
             ],
-            // New Year's Eve gala dinner with a single seating.
+            // Réveillon du Nouvel An : service unique, capacité limitée.
             [
                 'date' => '2026-12-31',
-                'service_type' => ServiceType::Dinner,
-                'capacity' => 30,
-                'max_party_size' => 6,
+                'capacity_override' => 30,
+                'pacing_override' => null,
                 'reason' => 'Réveillon du Nouvel An - service unique',
             ],
-            // A private event blocks part of the lunch service.
+            // Privatisation partielle : seule la cadence d'arrivée est bridée.
             [
                 'date' => '2026-06-20',
-                'service_type' => ServiceType::Lunch,
-                'capacity' => 15,
-                'max_party_size' => 6,
-                'reason' => 'Privatisation partielle - capacité réduite',
+                'capacity_override' => null,
+                'pacing_override' => 3,
+                'reason' => 'Privatisation partielle - cadence réduite',
             ],
         ];
 
-        // Spread each reduced-capacity override onto a distinct restaurant.
-        $targets = $restaurants->skip(4)->take(count($reducedDates))->values();
+        // On vise des restaurants distincts de ceux des horaires spéciaux quand c'est
+        // possible, sinon on retombe sur les premiers.
+        $targets = $restaurants->skip(2)->take(count($reducedDates))->values();
 
         if ($targets->isEmpty()) {
             $targets = $restaurants->take(count($reducedDates))->values();
@@ -164,14 +166,20 @@ class ScheduleExceptionSeeder extends Seeder
                 continue;
             }
 
+            $service = $this->firstActiveService($restaurant);
+
+            if ($service === null) {
+                continue;
+            }
+
             $this->upsertException(
                 restaurant: $restaurant,
+                service: $service,
                 date: $override['date'],
-                serviceType: $override['service_type'],
+                type: ScheduleExceptionType::ReducedCapacity,
                 attributes: [
-                    'is_closed' => false,
-                    'capacity' => $override['capacity'],
-                    'max_party_size' => $override['max_party_size'],
+                    'capacity_override' => $override['capacity_override'],
+                    'pacing_override' => $override['pacing_override'],
                     'reason' => $override['reason'],
                 ],
             );
@@ -179,46 +187,41 @@ class ScheduleExceptionSeeder extends Seeder
     }
 
     /**
-     * Idempotently create a schedule exception.
-     *
-     * service_type_key is a generated column and must never be written.
+     * Premier service actif d'un restaurant (par position), ou null.
+     */
+    private function firstActiveService(Restaurant $restaurant): ?Service
+    {
+        return Service::query()
+            ->where('restaurant_id', $restaurant->id)
+            ->where('is_active', true)
+            ->orderBy('position')
+            ->orderBy('id')
+            ->first();
+    }
+
+    /**
+     * Crée idempotemment une dérogation en respectant l'unicité
+     * (restaurant, service, date, type).
      *
      * @param  array<string, mixed>  $attributes
      */
     private function upsertException(
         Restaurant $restaurant,
+        ?Service $service,
         string $date,
-        ?ServiceType $serviceType,
+        ScheduleExceptionType $type,
         array $attributes,
     ): void {
-        DB::transaction(function () use ($restaurant, $date, $serviceType, $attributes): void {
+        DB::transaction(function () use ($restaurant, $service, $date, $type, $attributes): void {
             ScheduleException::query()->firstOrCreate(
                 [
                     'restaurant_id' => $restaurant->id,
+                    'service_id' => $service?->id,
                     'date' => $date,
-                    'service_type' => $serviceType?->value,
+                    'type' => $type->value,
                 ],
                 $attributes,
             );
         });
-    }
-
-    /**
-     * Build the inclusive list of ISO dates between two days.
-     *
-     * @return list<string>
-     */
-    private function datesBetween(string $start, string $end): array
-    {
-        $dates = [];
-        $cursor = CarbonImmutable::parse($start);
-        $last = CarbonImmutable::parse($end);
-
-        while ($cursor->lessThanOrEqualTo($last)) {
-            $dates[] = $cursor->toDateString();
-            $cursor = $cursor->addDay();
-        }
-
-        return $dates;
     }
 }

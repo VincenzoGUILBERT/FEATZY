@@ -3,12 +3,15 @@
 namespace App\Models;
 
 use App\Enums\DayOfWeek;
-use App\Enums\ServiceType;
 use Database\Factories\ServiceScheduleFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * Fenêtre hebdomadaire récurrente d'ouverture d'un service un jour donné. Plusieurs
+ * fenêtres par (service, jour) sont permises pour les services coupés.
+ */
 class ServiceSchedule extends Model
 {
     /** @use HasFactory<ServiceScheduleFactory> */
@@ -23,18 +26,15 @@ class ServiceSchedule extends Model
     {
         return [
             'day_of_week' => DayOfWeek::class,
-            'service_type' => ServiceType::class,
-            'capacity' => 'integer',
-            'max_party_size' => 'integer',
-            'is_active' => 'boolean',
+            'crosses_midnight' => 'boolean',
         ];
     }
 
     /**
-     * @return BelongsTo<Restaurant, $this>
+     * @return BelongsTo<Service, $this>
      */
-    public function restaurant(): BelongsTo
+    public function service(): BelongsTo
     {
-        return $this->belongsTo(Restaurant::class);
+        return $this->belongsTo(Service::class);
     }
 }

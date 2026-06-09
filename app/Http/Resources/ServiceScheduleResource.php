@@ -18,14 +18,12 @@ class ServiceScheduleResource extends JsonResource
     {
         return [
             'id' => $this->id,
-            'restaurant_id' => $this->restaurant_id,
+            'service_id' => $this->service_id,
             'day_of_week' => $this->day_of_week->value,
-            'service_type' => $this->service_type->value,
-            'start_time' => $this->start_time,
-            'end_time' => $this->end_time,
-            'capacity' => $this->capacity,
-            'max_party_size' => $this->max_party_size,
-            'is_active' => $this->is_active,
+            'opens_at' => $this->opens_at,
+            'last_seating_at' => $this->last_seating_at,
+            'closes_at' => $this->closes_at,
+            'crosses_midnight' => $this->crosses_midnight,
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];

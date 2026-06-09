@@ -9,6 +9,7 @@ use App\Models\Reservation;
 use App\Models\ReservationParticipant;
 use App\Models\Restaurant;
 use App\Models\User;
+use Carbon\CarbonImmutable;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -110,9 +111,17 @@ function preorderContext(User $organizer, array $reservationAttributes = []): ar
 {
     $restaurant = Restaurant::factory()->published()->create(['accepts_preorders' => true]);
 
+    // Créneau confortablement futur : l'annulation reste dans les délais quel que soit
+    // le deadline du restaurant. reserved_at/slot_at/ends_at restent cohérents.
+    $reservedAt = CarbonImmutable::now()->addDays(5)->setTime(20, 0);
+
     $reservation = Reservation::factory()->for($restaurant)->for($organizer, 'organizer')->create(array_merge([
         'is_preorder' => true,
         'status' => ReservationStatus::Confirmed,
+        'reserved_at' => $reservedAt,
+        'slot_at' => $reservedAt,
+        'ends_at' => $reservedAt->addMinutes(90),
+        'seating_duration_minutes' => 90,
     ], $reservationAttributes));
 
     $participant = ReservationParticipant::factory()->for($reservation)->for($organizer)->organizer()->create();

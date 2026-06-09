@@ -9,11 +9,19 @@ class ScheduleExceptionPolicy
 {
     public function update(User $user, ScheduleException $scheduleException): bool
     {
-        return $scheduleException->restaurant?->owner_id === $user->id;
+        return $this->owns($user, $scheduleException);
     }
 
     public function delete(User $user, ScheduleException $scheduleException): bool
     {
-        return $scheduleException->restaurant?->owner_id === $user->id;
+        return $this->owns($user, $scheduleException);
+    }
+
+    /**
+     * Propriété via le restaurant (requête, sans lazy-loading).
+     */
+    private function owns(User $user, ScheduleException $scheduleException): bool
+    {
+        return $scheduleException->restaurant()->where('owner_id', $user->id)->exists();
     }
 }

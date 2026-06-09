@@ -8,23 +8,30 @@ use App\Enums\ParticipantRole;
 use App\Enums\ReservationStatus;
 use App\Events\Reservation\ReservationCreated;
 use App\Exceptions\Order\PreordersNotAcceptedException;
-use App\Exceptions\Reservation\CapacityExceededException;
+use App\Exceptions\Reservation\SlotUnavailableException;
 use App\Models\Reservation;
 use App\Models\Restaurant;
-use App\Models\ServiceAvailability;
 use App\Models\User;
+use App\Support\Availability\AvailabilityService;
+use Carbon\CarbonImmutable;
+use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
+/**
+ * Réserve un créneau pour l'organisateur, sans surbooking. La disponibilité est calculée
+ * à la volée (couverts simultanés par chevauchement + pacing par créneau) : il n'y a pas de
+ * compteur à décrémenter. La vérification finale et l'insertion se font donc sous un verrou
+ * sérialisant par POOL de capacité, à l'intérieur d'une transaction. L'organisateur est
+ * persisté comme premier participant dans la même transaction.
+ */
 class CreateReservationAction
 {
+    public function __construct(private readonly AvailabilityService $availability) {}
+
     /**
-     * Book a service slot for the organizer, decrementing capacity atomically.
-     *
-     * The capacity guard is a single conditional UPDATE
-     * (`booked_seats + party <= capacity`) rather than a read-then-write, so
-     * concurrent bookings can never overshoot the slot's capacity; a zero-row
-     * result means the slot is full and surfaces as a 409. The organizer is
-     * persisted as the first participant within the same transaction.
+     * @throws PreordersNotAcceptedException
+     * @throws SlotUnavailableException
      */
     public function handle(Restaurant $restaurant, CreateReservationData $data, User $organizer): Reservation
     {
@@ -32,44 +39,81 @@ class CreateReservationAction
             throw new PreordersNotAcceptedException;
         }
 
-        $slot = ServiceAvailability::query()->findOrFail($data->service_availability_id);
+        $service = $restaurant->services()->active()->findOrFail($data->service_id);
+        $service->setRelation('restaurant', $restaurant);
+
+        $date = CarbonImmutable::parse($data->date);
+        $slotStart = CarbonImmutable::parse($data->reserved_at);
         $partySize = $data->party_size;
 
-        $reservation = DB::transaction(function () use ($restaurant, $slot, $data, $organizer, $partySize): Reservation {
-            $seatsTaken = ServiceAvailability::query()
-                ->whereKey($slot->id)
-                ->whereRaw('booked_seats + ? <= capacity', [$partySize])
-                ->update(['booked_seats' => DB::raw('booked_seats + '.$partySize)]);
+        $min = $service->effectiveMinPartySize();
+        $max = $service->effectiveMaxPartySize();
 
-            if ($seatsTaken === 0) {
-                throw new CapacityExceededException;
-            }
+        if ($partySize < $min || $partySize > $max) {
+            throw new SlotUnavailableException("Le nombre de couverts doit être compris entre {$min} et {$max}.");
+        }
 
-            $reservation = $restaurant->reservations()->create([
-                'service_availability_id' => $slot->id,
-                'organizer_id' => $organizer->id,
-                'reservation_date' => $slot->date->toDateString(),
-                'service_type' => $slot->service_type->value,
-                'party_size' => $partySize,
-                'status' => ReservationStatus::Confirmed->value,
-                'is_preorder' => $data->is_preorder,
-                'special_requests' => $data->special_requests,
-                'expected_arrival_time' => $data->expected_arrival_time,
-            ]);
+        // Pré-vérification hors verrou (échoue vite sur un créneau invalide / fermé / complet).
+        if (! $this->availability->isSlotBookable($service, $date, $slotStart, $partySize)) {
+            throw new SlotUnavailableException;
+        }
 
-            $reservation->participants()->create([
-                'user_id' => $organizer->id,
-                'role' => ParticipantRole::Organizer->value,
-                'invitation_status' => InvitationStatus::Accepted->value,
-                'responded_at' => now(),
-                'is_attending' => true,
-            ]);
+        $lockKey = "avail:pool:{$restaurant->id}:{$service->capacity_pool_key}";
 
-            return $reservation;
-        });
+        try {
+            $reservation = Cache::lock($lockKey, 10)->block(5, function () use ($restaurant, $service, $organizer, $data, $date, $slotStart, $partySize): Reservation {
+                return DB::transaction(function () use ($restaurant, $service, $organizer, $data, $date, $slotStart, $partySize): Reservation {
+                    // Re-vérification sous verrou, sur des données fraîches.
+                    if (! $this->availability->isSlotBookable($service, $date, $slotStart, $partySize)) {
+                        throw new SlotUnavailableException;
+                    }
+
+                    $duration = $service->effectiveSeatingDuration();
+                    $end = $slotStart->addMinutes($duration);
+
+                    // Anti double-booking : pas de réservation active du même organisateur
+                    // chevauchant ce créneau.
+                    $conflict = Reservation::query()
+                        ->where('organizer_id', $organizer->id)
+                        ->occupying()
+                        ->overlapping($slotStart, $end)
+                        ->exists();
+
+                    if ($conflict) {
+                        throw new SlotUnavailableException('Vous avez déjà une réservation sur ce créneau.');
+                    }
+
+                    $reservation = $restaurant->reservations()->create([
+                        'service_id' => $service->id,
+                        'organizer_id' => $organizer->id,
+                        'party_size' => $partySize,
+                        'reserved_at' => $slotStart,
+                        'slot_at' => $slotStart,
+                        'ends_at' => $end,
+                        'seating_duration_minutes' => $duration,
+                        'capacity_pool_key' => $service->capacity_pool_key,
+                        'status' => ReservationStatus::Confirmed->value,
+                        'is_preorder' => $data->is_preorder,
+                        'special_requests' => $data->special_requests,
+                    ]);
+
+                    $reservation->participants()->create([
+                        'user_id' => $organizer->id,
+                        'role' => ParticipantRole::Organizer->value,
+                        'invitation_status' => InvitationStatus::Accepted->value,
+                        'responded_at' => now(),
+                        'is_attending' => true,
+                    ]);
+
+                    return $reservation;
+                });
+            });
+        } catch (LockTimeoutException) {
+            throw new SlotUnavailableException('Trop de demandes simultanées sur ce service, merci de réessayer.');
+        }
 
         ReservationCreated::dispatch($reservation);
 
-        return $reservation->load(['participants.user', 'serviceAvailability']);
+        return $reservation->load(['participants.user', 'service', 'restaurant']);
     }
 }

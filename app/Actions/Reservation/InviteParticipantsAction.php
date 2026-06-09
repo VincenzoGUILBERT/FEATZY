@@ -21,7 +21,7 @@ class InviteParticipantsAction
 {
     /**
      * Invite guests to a reservation, expanding an optional friend group into its
-     * members. Invitations never touch booked_seats — the seats were claimed when
+     * members. Invitations never affect availability — the covers were claimed when
      * the reservation was created — but the total participant count is capped at
      * the reservation's party size.
      *

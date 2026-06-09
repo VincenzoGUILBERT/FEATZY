@@ -1,154 +1,176 @@
 <?php
 
 use App\Models\Restaurant;
+use App\Models\Service;
 use App\Models\ServiceSchedule;
+use App\Models\User;
+use Carbon\CarbonImmutable;
 
 beforeEach(function () {
     $this->withHeader('Origin', config('app.frontend_url'));
+    CarbonImmutable::setTestNow('2026-06-15 09:00:00');
 });
 
-it('creates a service schedule', function () {
-    $owner = actingAsRestaurateur();
-    $restaurant = Restaurant::factory()->for($owner, 'owner')->create();
-
-    $this->postJson("/api/restaurants/{$restaurant->id}/service-schedules", [
-        'day_of_week' => 1,
-        'service_type' => 'dinner',
-        'start_time' => '19:00:00',
-        'end_time' => '22:30:00',
-        'capacity' => 40,
-        'max_party_size' => 8,
-    ])
-        ->assertCreated()
-        ->assertJsonPath('data.day_of_week', 1)
-        ->assertJsonPath('data.service_type', 'dinner')
-        ->assertJsonPath('data.capacity', 40)
-        ->assertJsonPath('data.is_active', true);
+afterEach(function () {
+    CarbonImmutable::setTestNow();
 });
 
-it('lists schedules ordered by day', function () {
-    $owner = actingAsRestaurateur();
+/**
+ * Restaurant détenu par $owner + un service rattaché (intervalle de créneau = 15 min par défaut).
+ *
+ * @return array{0: Restaurant, 1: Service}
+ */
+function ownedRestaurantWithService(User $owner): array
+{
     $restaurant = Restaurant::factory()->for($owner, 'owner')->create();
-    ServiceSchedule::factory()->for($restaurant)->create(['day_of_week' => 5, 'service_type' => 'dinner']);
-    ServiceSchedule::factory()->for($restaurant)->create(['day_of_week' => 1, 'service_type' => 'lunch']);
+    $service = Service::factory()->for($restaurant)->create([
+        'max_simultaneous_covers' => 40,
+        'max_covers_per_slot' => 8,
+    ]);
 
-    $this->getJson("/api/restaurants/{$restaurant->id}/service-schedules")
+    return [$restaurant, $service];
+}
+
+it('lists the schedules of a service for the owner', function () {
+    $owner = actingAsRestaurateur();
+    [, $service] = ownedRestaurantWithService($owner);
+
+    ServiceSchedule::factory()->for($service)->create(['day_of_week' => 1]);
+    ServiceSchedule::factory()->for($service)->create(['day_of_week' => 5]);
+
+    $this->getJson("/api/services/{$service->id}/service-schedules")
         ->assertOk()
         ->assertJsonCount(2, 'data')
-        ->assertJsonPath('data.0.day_of_week', 1);
+        ->assertJsonPath('data.0.service_id', $service->id);
 });
 
-it('rejects a duplicate day and service combination', function () {
+it('stores a valid schedule', function () {
     $owner = actingAsRestaurateur();
-    $restaurant = Restaurant::factory()->for($owner, 'owner')->create();
-    ServiceSchedule::factory()->for($restaurant)->create(['day_of_week' => 1, 'service_type' => 'dinner']);
+    [, $service] = ownedRestaurantWithService($owner);
 
-    $this->postJson("/api/restaurants/{$restaurant->id}/service-schedules", [
+    $this->postJson("/api/services/{$service->id}/service-schedules", [
         'day_of_week' => 1,
-        'service_type' => 'dinner',
-        'start_time' => '19:00:00',
-        'end_time' => '22:30:00',
-        'capacity' => 40,
-        'max_party_size' => 8,
+        'opens_at' => '12:00:00',
+        'last_seating_at' => '13:30:00',
+        'closes_at' => '15:00:00',
+        'crosses_midnight' => false,
     ])
-        ->assertStatus(422)
-        ->assertJsonValidationErrors('service_type');
-});
+        ->assertCreated()
+        ->assertJsonPath('data.service_id', $service->id)
+        ->assertJsonPath('data.day_of_week', 1)
+        ->assertJsonPath('data.opens_at', '12:00:00')
+        ->assertJsonPath('data.last_seating_at', '13:30:00')
+        ->assertJsonPath('data.closes_at', '15:00:00');
 
-it('rejects an end time before the start time', function () {
-    $owner = actingAsRestaurateur();
-    $restaurant = Restaurant::factory()->for($owner, 'owner')->create();
-
-    $this->postJson("/api/restaurants/{$restaurant->id}/service-schedules", [
+    $this->assertDatabaseHas('service_schedules', [
+        'service_id' => $service->id,
         'day_of_week' => 1,
-        'service_type' => 'lunch',
-        'start_time' => '22:00:00',
-        'end_time' => '19:00:00',
-        'capacity' => 40,
-        'max_party_size' => 8,
-    ])
-        ->assertStatus(422)
-        ->assertJsonValidationErrors('end_time');
+        'opens_at' => '12:00:00',
+    ]);
 });
 
-it('rejects a max party size greater than the capacity', function () {
+it('rejects an opens_at not aligned on the slot interval', function () {
     $owner = actingAsRestaurateur();
-    $restaurant = Restaurant::factory()->for($owner, 'owner')->create();
+    [, $service] = ownedRestaurantWithService($owner);
 
-    $this->postJson("/api/restaurants/{$restaurant->id}/service-schedules", [
+    // 12:07 n'est pas un multiple de 15 min depuis minuit → clé opens_at.
+    $this->postJson("/api/services/{$service->id}/service-schedules", [
         'day_of_week' => 1,
-        'service_type' => 'lunch',
-        'start_time' => '12:00:00',
-        'end_time' => '14:30:00',
-        'capacity' => 10,
-        'max_party_size' => 20,
+        'opens_at' => '12:07:00',
+        'last_seating_at' => '13:30:00',
+        'closes_at' => '15:00:00',
+        'crosses_midnight' => false,
     ])
         ->assertStatus(422)
-        ->assertJsonValidationErrors('max_party_size');
+        ->assertJsonValidationErrors('opens_at');
 });
 
-it('rejects an invalid day of week', function () {
+it('rejects a last_seating_at before the opens_at without crossing midnight', function () {
     $owner = actingAsRestaurateur();
-    $restaurant = Restaurant::factory()->for($owner, 'owner')->create();
+    [, $service] = ownedRestaurantWithService($owner);
 
-    $this->postJson("/api/restaurants/{$restaurant->id}/service-schedules", [
-        'day_of_week' => 9,
-        'service_type' => 'lunch',
-        'start_time' => '12:00:00',
-        'end_time' => '14:30:00',
-        'capacity' => 10,
-        'max_party_size' => 4,
+    $this->postJson("/api/services/{$service->id}/service-schedules", [
+        'day_of_week' => 1,
+        'opens_at' => '19:00:00',
+        'last_seating_at' => '12:00:00',
+        'closes_at' => '15:00:00',
+        'crosses_midnight' => false,
     ])
         ->assertStatus(422)
-        ->assertJsonValidationErrors('day_of_week');
+        ->assertJsonValidationErrors('last_seating_at');
 });
 
 it('updates a schedule', function () {
     $owner = actingAsRestaurateur();
-    $schedule = ServiceSchedule::factory()
-        ->for(Restaurant::factory()->for($owner, 'owner'))
-        ->create(['capacity' => 30, 'max_party_size' => 6]);
+    [, $service] = ownedRestaurantWithService($owner);
+    $schedule = ServiceSchedule::factory()->for($service)->create(['day_of_week' => 1]);
 
-    $this->patchJson("/api/service-schedules/{$schedule->id}", ['capacity' => 50])
+    $this->patchJson("/api/service-schedules/{$schedule->id}", [
+        'last_seating_at' => '14:00:00',
+    ])
         ->assertOk()
-        ->assertJsonPath('data.capacity', 50);
-});
+        ->assertJsonPath('data.id', $schedule->id)
+        ->assertJsonPath('data.last_seating_at', '14:00:00');
 
-it('rejects an update conflicting with another schedule', function () {
-    $owner = actingAsRestaurateur();
-    $restaurant = Restaurant::factory()->for($owner, 'owner')->create();
-    ServiceSchedule::factory()->for($restaurant)->create(['day_of_week' => 1, 'service_type' => 'dinner']);
-    $other = ServiceSchedule::factory()->for($restaurant)->create(['day_of_week' => 2, 'service_type' => 'dinner']);
-
-    $this->patchJson("/api/service-schedules/{$other->id}", ['day_of_week' => 1])
-        ->assertStatus(422)
-        ->assertJsonValidationErrors('service_type');
-});
-
-it('rejects an update making the party size exceed the capacity', function () {
-    $owner = actingAsRestaurateur();
-    $schedule = ServiceSchedule::factory()
-        ->for(Restaurant::factory()->for($owner, 'owner'))
-        ->create(['capacity' => 10, 'max_party_size' => 5]);
-
-    $this->patchJson("/api/service-schedules/{$schedule->id}", ['max_party_size' => 20])
-        ->assertStatus(422)
-        ->assertJsonValidationErrors('max_party_size');
+    $this->assertDatabaseHas('service_schedules', [
+        'id' => $schedule->id,
+        'last_seating_at' => '14:00:00',
+    ]);
 });
 
 it('deletes a schedule', function () {
     $owner = actingAsRestaurateur();
-    $schedule = ServiceSchedule::factory()->for(Restaurant::factory()->for($owner, 'owner'))->create();
+    [, $service] = ownedRestaurantWithService($owner);
+    $schedule = ServiceSchedule::factory()->for($service)->create();
 
-    $this->deleteJson("/api/service-schedules/{$schedule->id}")->assertNoContent();
+    $this->deleteJson("/api/service-schedules/{$schedule->id}")
+        ->assertNoContent();
 
     $this->assertDatabaseMissing('service_schedules', ['id' => $schedule->id]);
 });
 
-it('forbids managing a schedule of another owner', function () {
-    actingAsRestaurateur();
-    $foreign = ServiceSchedule::factory()->create();
+it('forbids a non-owner from managing schedules', function () {
+    // Le service appartient à un autre propriétaire.
+    $foreignOwner = User::factory()->restaurateur()->create();
+    [, $service] = ownedRestaurantWithService($foreignOwner);
+    $schedule = ServiceSchedule::factory()->for($service)->create();
 
-    $this->patchJson("/api/service-schedules/{$foreign->id}", ['capacity' => 99])
+    // L'utilisateur authentifié n'est pas le propriétaire.
+    actingAsRestaurateur();
+
+    $this->postJson("/api/services/{$service->id}/service-schedules", [
+        'day_of_week' => 2,
+        'opens_at' => '12:00:00',
+        'last_seating_at' => '13:30:00',
+        'closes_at' => '15:00:00',
+        'crosses_midnight' => false,
+    ])->assertForbidden();
+
+    $this->patchJson("/api/service-schedules/{$schedule->id}", [
+        'last_seating_at' => '14:00:00',
+    ])->assertForbidden();
+
+    $this->deleteJson("/api/service-schedules/{$schedule->id}")
         ->assertForbidden();
+});
+
+it('requires authentication', function () {
+    $owner = User::factory()->restaurateur()->create();
+    [, $service] = ownedRestaurantWithService($owner);
+    $schedule = ServiceSchedule::factory()->for($service)->create();
+
+    $this->postJson("/api/services/{$service->id}/service-schedules", [
+        'day_of_week' => 1,
+        'opens_at' => '12:00:00',
+        'last_seating_at' => '13:30:00',
+        'closes_at' => '15:00:00',
+        'crosses_midnight' => false,
+    ])->assertUnauthorized();
+
+    $this->patchJson("/api/service-schedules/{$schedule->id}", [
+        'last_seating_at' => '14:00:00',
+    ])->assertUnauthorized();
+
+    $this->deleteJson("/api/service-schedules/{$schedule->id}")
+        ->assertUnauthorized();
 });

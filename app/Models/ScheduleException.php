@@ -2,12 +2,16 @@
 
 namespace App\Models;
 
-use App\Enums\ServiceType;
+use App\Enums\ScheduleExceptionType;
 use Database\Factories\ScheduleExceptionFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * Dérogation datée d'un restaurant : fermeture, horaires spéciaux ou capacité réduite.
+ * `service_id` null = dérogation pour tout le restaurant ; un service ciblé prime.
+ */
 class ScheduleException extends Model
 {
     /** @use HasFactory<ScheduleExceptionFactory> */
@@ -22,10 +26,10 @@ class ScheduleException extends Model
     {
         return [
             'date' => 'date',
-            'service_type' => ServiceType::class,
-            'is_closed' => 'boolean',
-            'capacity' => 'integer',
-            'max_party_size' => 'integer',
+            'type' => ScheduleExceptionType::class,
+            'crosses_midnight' => 'boolean',
+            'capacity_override' => 'integer',
+            'pacing_override' => 'integer',
         ];
     }
 
@@ -35,5 +39,13 @@ class ScheduleException extends Model
     public function restaurant(): BelongsTo
     {
         return $this->belongsTo(Restaurant::class);
+    }
+
+    /**
+     * @return BelongsTo<Service, $this>
+     */
+    public function service(): BelongsTo
+    {
+        return $this->belongsTo(Service::class);
     }
 }

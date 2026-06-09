@@ -85,7 +85,7 @@ class ReviewSeeder extends Seeder
     {
         $reservations = Reservation::query()
             ->where('status', ReservationStatus::Completed->value)
-            ->get(['id', 'restaurant_id', 'organizer_id', 'completed_at', 'reservation_date']);
+            ->get(['id', 'restaurant_id', 'organizer_id', 'completed_at', 'reserved_at']);
 
         foreach ($reservations as $reservation) {
             if ($faker->boolean(60) === false) {
@@ -97,7 +97,7 @@ class ReviewSeeder extends Seeder
                 ? $faker->randomElement($this->positiveComments)
                 : $faker->randomElement($this->mixedComments);
 
-            $createdAt = ($reservation->completed_at ?? $reservation->reservation_date)
+            $createdAt = ($reservation->completed_at ?? $reservation->reserved_at)
                 ->copy()
                 ->addHours($faker->numberBetween(1, 72));
 

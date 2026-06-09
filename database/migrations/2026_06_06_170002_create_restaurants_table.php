@@ -29,6 +29,12 @@ return new class extends Migration
             $table->boolean('accepts_online_payment')->default(false);
             $table->unsignedSmallInteger('cancellation_deadline_hours')->default(24);
             $table->unsignedSmallInteger('booking_horizon_days')->default(90);
+            // Paramètres de réservation par créneau (défauts hérités par les services).
+            $table->unsignedSmallInteger('default_seating_duration_minutes')->default(90);
+            $table->unsignedTinyInteger('slot_interval_minutes')->default(15);
+            $table->unsignedSmallInteger('min_lead_time_minutes')->default(0);
+            $table->unsignedSmallInteger('min_party_size')->default(1);
+            $table->unsignedSmallInteger('max_party_size')->default(20);
             $table->string('status', 16)->default('draft');
             $table->decimal('average_rating', 3, 2)->nullable();
             $table->unsignedInteger('reviews_count')->default(0);

@@ -3,7 +3,6 @@
 use App\Actions\Order\PlaceOrderAction;
 use App\Actions\Order\RestoreOrderStockAction;
 use App\Enums\OrderStatus;
-use App\Enums\ServiceType;
 use App\Models\OrderItem;
 use Carbon\CarbonImmutable;
 
@@ -19,10 +18,7 @@ afterEach(function () {
 it('restores a placed order stock when the reservation is cancelled', function () {
     $organizer = actingAsClient();
     ['restaurant' => $restaurant, 'reservation' => $reservation, 'order' => $order, 'participant' => $participant] =
-        preorderContext($organizer, [
-            'reservation_date' => CarbonImmutable::today()->addDays(5)->toDateString(),
-            'service_type' => ServiceType::Dinner,
-        ]);
+        preorderContext($organizer);
     $item = menuItemFor($restaurant, ['stock_quantity' => 10]);
     OrderItem::factory()->for($order)->for($participant, 'participant')->for($item, 'menuItem')->create([
         'name_snapshot' => $item->name, 'quantity' => 3, 'unit_price_snapshot' => 0, 'options_total_snapshot' => 0,
@@ -41,10 +37,7 @@ it('restores a placed order stock when the reservation is cancelled', function (
 it('restores stock even when the menu item was soft-deleted after placing', function () {
     $organizer = actingAsClient();
     ['restaurant' => $restaurant, 'reservation' => $reservation, 'order' => $order, 'participant' => $participant] =
-        preorderContext($organizer, [
-            'reservation_date' => CarbonImmutable::today()->addDays(5)->toDateString(),
-            'service_type' => ServiceType::Dinner,
-        ]);
+        preorderContext($organizer);
     $item = menuItemFor($restaurant, ['stock_quantity' => 10]);
     OrderItem::factory()->for($order)->for($participant, 'participant')->for($item, 'menuItem')->create([
         'name_snapshot' => $item->name, 'quantity' => 3, 'unit_price_snapshot' => 0, 'options_total_snapshot' => 0,
@@ -63,10 +56,7 @@ it('restores stock even when the menu item was soft-deleted after placing', func
 it('does not re-stock or override a served order on reservation cancel', function () {
     $organizer = actingAsClient();
     ['restaurant' => $restaurant, 'reservation' => $reservation, 'order' => $order, 'participant' => $participant] =
-        preorderContext($organizer, [
-            'reservation_date' => CarbonImmutable::today()->addDays(5)->toDateString(),
-            'service_type' => ServiceType::Dinner,
-        ]);
+        preorderContext($organizer);
     $item = menuItemFor($restaurant, ['stock_quantity' => 7]); // already decremented at place
     OrderItem::factory()->for($order)->for($participant, 'participant')->for($item, 'menuItem')->create([
         'name_snapshot' => $item->name, 'quantity' => 3, 'unit_price_snapshot' => 0, 'options_total_snapshot' => 0,
@@ -83,10 +73,7 @@ it('does not re-stock or override a served order on reservation cancel', functio
 it('voids a pending order on cancellation without touching stock', function () {
     $organizer = actingAsClient();
     ['restaurant' => $restaurant, 'reservation' => $reservation, 'order' => $order, 'participant' => $participant] =
-        preorderContext($organizer, [
-            'reservation_date' => CarbonImmutable::today()->addDays(5)->toDateString(),
-            'service_type' => ServiceType::Dinner,
-        ]);
+        preorderContext($organizer);
     $item = menuItemFor($restaurant, ['stock_quantity' => 10]);
     OrderItem::factory()->for($order)->for($participant, 'participant')->for($item, 'menuItem')->create([
         'name_snapshot' => $item->name, 'quantity' => 3, 'unit_price_snapshot' => 0, 'options_total_snapshot' => 0,

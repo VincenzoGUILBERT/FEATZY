@@ -10,5 +10,7 @@ require __DIR__.'/api/review.php';
 require __DIR__.'/api/admin.php';
 require __DIR__.'/api/restaurant.php';
 require __DIR__.'/api/menu.php';
+require __DIR__.'/api/service.php';
 require __DIR__.'/api/schedule.php';
 require __DIR__.'/api/availability.php';
+require __DIR__.'/api/reference.php';

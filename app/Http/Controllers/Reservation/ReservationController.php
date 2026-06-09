@@ -25,8 +25,8 @@ class ReservationController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         $reservations = $request->user()->reservations()
-            ->with(['restaurant', 'serviceAvailability'])
-            ->latest()
+            ->with(['restaurant', 'service'])
+            ->orderByDesc('reserved_at')
             ->paginate();
 
         return ReservationResource::collection($reservations);
@@ -53,7 +53,7 @@ class ReservationController extends Controller
     public function show(Reservation $reservation): ReservationResource
     {
         return ReservationResource::make(
-            $reservation->load(['restaurant', 'serviceAvailability', 'participants.user']),
+            $reservation->load(['restaurant', 'service', 'participants.user']),
         );
     }
 

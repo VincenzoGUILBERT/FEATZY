@@ -3,10 +3,12 @@
 namespace App\Http\Requests\Schedule;
 
 use App\Enums\DayOfWeek;
-use App\Enums\ServiceType;
-use App\Models\Restaurant;
+use App\Models\Service;
+use App\Support\Availability\ScheduleWindowRules;
+use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Validator;
 
 class StoreServiceScheduleRequest extends FormRequest
 {
@@ -16,27 +18,42 @@ class StoreServiceScheduleRequest extends FormRequest
     }
 
     /**
-     * @return array<string, array<int, mixed>>
+     * @return array<string, ValidationRule|array<mixed>|string>
      */
     public function rules(): array
     {
-        /** @var Restaurant $restaurant */
-        $restaurant = $this->route('restaurant');
-
         return [
             'day_of_week' => ['required', Rule::enum(DayOfWeek::class)],
-            'service_type' => [
-                'required',
-                Rule::enum(ServiceType::class),
-                Rule::unique('service_schedules')
-                    ->where('restaurant_id', $restaurant->id)
-                    ->where('day_of_week', (int) $this->input('day_of_week')),
-            ],
-            'start_time' => ['required', 'date_format:H:i,H:i:s'],
-            'end_time' => ['required', 'date_format:H:i,H:i:s', 'after:start_time'],
-            'capacity' => ['required', 'integer', 'min:0', 'max:65535'],
-            'max_party_size' => ['required', 'integer', 'min:1', 'max:65535', 'lte:capacity'],
-            'is_active' => ['boolean'],
+            'opens_at' => ['required', 'date_format:H:i,H:i:s'],
+            'last_seating_at' => ['required', 'date_format:H:i,H:i:s'],
+            'closes_at' => ['required', 'date_format:H:i,H:i:s'],
+            'crosses_midnight' => ['boolean'],
         ];
+    }
+
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function (Validator $validator): void {
+            if ($validator->errors()->isNotEmpty()) {
+                return;
+            }
+
+            /** @var Service $service */
+            $service = $this->route('service');
+
+            ScheduleWindowRules::validate(
+                $validator,
+                $service,
+                $this->normalize($this->input('opens_at')),
+                $this->normalize($this->input('last_seating_at')),
+                $this->normalize($this->input('closes_at')),
+                $this->boolean('crosses_midnight'),
+            );
+        });
+    }
+
+    private function normalize(?string $time): string
+    {
+        return str_pad((string) $time, 8, ':00');
     }
 }

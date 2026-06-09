@@ -23,12 +23,12 @@ class RestaurantReservationController extends Controller
         $reservations = QueryBuilder::for($restaurant->reservations())
             ->allowedFilters(
                 AllowedFilter::exact('status'),
-                AllowedFilter::exact('reservation_date'),
-                AllowedFilter::exact('service_type'),
+                AllowedFilter::exact('service_id'),
+                AllowedFilter::callback('date', fn ($query, $value) => $query->whereDate('reserved_at', $value)),
             )
-            ->allowedSorts('reservation_date', 'created_at')
-            ->defaultSort('-reservation_date')
-            ->with('serviceAvailability')
+            ->allowedSorts('reserved_at', 'created_at')
+            ->defaultSort('-reserved_at')
+            ->with('service')
             ->paginate()
             ->appends($request->query());
 

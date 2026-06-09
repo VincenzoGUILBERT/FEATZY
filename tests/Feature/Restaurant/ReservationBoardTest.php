@@ -13,7 +13,7 @@ it('lists the restaurant reservations for the owner', function () {
     $owner = actingAsRestaurateur();
     $restaurant = Restaurant::factory()->for($owner, 'owner')->create();
     Reservation::factory()->count(3)->for($restaurant)->create();
-    Reservation::factory()->count(2)->create(); // other restaurants
+    Reservation::factory()->count(2)->create(); // d'autres restaurants
 
     $this->getJson("/api/restaurants/{$restaurant->id}/reservations")
         ->assertOk()
@@ -34,18 +34,33 @@ it('filters the board by status', function () {
 it('filters the board by reservation date', function () {
     $owner = actingAsRestaurateur();
     $restaurant = Restaurant::factory()->for($owner, 'owner')->create();
-    $target = CarbonImmutable::today()->addDays(3)->toDateString();
-    Reservation::factory()->count(2)->for($restaurant)->create(['reservation_date' => $target]);
-    Reservation::factory()->for($restaurant)->create(['reservation_date' => CarbonImmutable::today()->addDays(7)->toDateString()]);
 
-    $this->getJson("/api/restaurants/{$restaurant->id}/reservations?filter[reservation_date]={$target}")
+    // Le filtre date applique whereDate sur reserved_at : on pose reserved_at/slot_at/ends_at cohérents.
+    $target = CarbonImmutable::parse('2026-06-20 12:00:00');
+    $other = CarbonImmutable::parse('2026-06-25 12:00:00');
+
+    foreach ([$target, $target] as $reservedAt) {
+        Reservation::factory()->for($restaurant)->create([
+            'reserved_at' => $reservedAt,
+            'slot_at' => $reservedAt,
+            'ends_at' => $reservedAt->addMinutes(90),
+        ]);
+    }
+
+    Reservation::factory()->for($restaurant)->create([
+        'reserved_at' => $other,
+        'slot_at' => $other,
+        'ends_at' => $other->addMinutes(90),
+    ]);
+
+    $this->getJson("/api/restaurants/{$restaurant->id}/reservations?filter[date]={$target->toDateString()}")
         ->assertOk()
         ->assertJsonCount(2, 'data');
 });
 
 it('forbids a non-owner from viewing the board', function () {
     actingAsRestaurateur();
-    $restaurant = Restaurant::factory()->create(); // another owner
+    $restaurant = Restaurant::factory()->create(); // un autre propriétaire
 
     $this->getJson("/api/restaurants/{$restaurant->id}/reservations")->assertForbidden();
 });

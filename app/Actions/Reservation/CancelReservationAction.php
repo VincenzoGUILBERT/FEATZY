@@ -9,7 +9,6 @@ use App\Events\Reservation\ReservationCancelled;
 use App\Exceptions\InvalidStatusTransitionException;
 use App\Exceptions\Reservation\CancellationDeadlinePassedException;
 use App\Models\Reservation;
-use App\Models\ServiceAvailability;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 
@@ -18,12 +17,11 @@ class CancelReservationAction
     public function __construct(private readonly RestoreOrderStockAction $restoreOrderStock) {}
 
     /**
-     * Cancel a confirmed reservation within its deadline and return its seats to
-     * the slot. The confirmed → cancelled transition is itself a conditional
-     * UPDATE (WHERE status = confirmed) so a concurrent or replayed cancel can
-     * never restore the same seats twice. The restore is clamped via LEAST so it
-     * can never underflow the UNSIGNED column. Any attached pre-order is voided
-     * and its stock returned to inventory in the same transaction.
+     * Annule une réservation confirmée dans les délais. La capacité se libère d'elle-même :
+     * le calcul de disponibilité ne compte que les statuts « occupants » (confirmée/installée),
+     * donc passer en « annulée » suffit — il n'y a aucun compteur à restaurer. Le passage
+     * confirmée → annulée est un UPDATE conditionnel (WHERE status = confirmed) idempotent
+     * sous concurrence. Toute pré-commande encore annulable est annulée et son stock restitué.
      */
     public function handle(Reservation $reservation, User $cancelledBy, ?string $reason = null): Reservation
     {
@@ -36,16 +34,13 @@ class CancelReservationAction
 
         $reservation->loadMissing('restaurant');
 
-        // The restaurant owner can cancel at any time; only the organizer (client)
-        // is bound by the cancellation deadline.
+        // Le propriétaire du restaurant peut annuler à tout moment ; seul l'organisateur
+        // (client) est tenu par le délai d'annulation, calculé depuis l'heure d'arrivée.
         $isOwner = $reservation->restaurant->owner_id === $cancelledBy->id;
 
         if (! $isOwner) {
-            $serviceStart = $reservation->reservation_date
-                ->copy()
-                ->setTimeFromTimeString($reservation->service_type->representativeStartTime());
-
-            $deadline = $serviceStart->subHours($reservation->restaurant->cancellation_deadline_hours);
+            $deadline = $reservation->reserved_at->copy()
+                ->subHours($reservation->restaurant->cancellation_deadline_hours);
 
             if (now()->greaterThan($deadline)) {
                 throw new CancellationDeadlinePassedException;
@@ -63,8 +58,7 @@ class CancelReservationAction
                     'cancellation_reason' => $reason,
                 ]);
 
-            // A concurrent cancel already moved the row out of "confirmed": skip
-            // the seat restore so capacity is never released more than once.
+            // Un cancel concurrent a déjà sorti la ligne de « confirmed ».
             if ($transitioned === 0) {
                 throw InvalidStatusTransitionException::between(
                     $reservation->status->value,
@@ -72,14 +66,8 @@ class CancelReservationAction
                 );
             }
 
-            ServiceAvailability::query()
-                ->whereKey($reservation->service_availability_id)
-                ->update(['booked_seats' => DB::raw('booked_seats - LEAST(booked_seats, '.$reservation->party_size.')')]);
-
-            // Void the attached pre-order and return its stock, but only while it
-            // is still voidable: a served order is terminal — never re-stock it or
-            // overwrite its record (mirrors the order-cancel matrix). The restore
-            // is idempotent and a no-op for a never-placed order.
+            // Annule la pré-commande attachée et restitue son stock, mais uniquement tant
+            // qu'elle est annulable : une commande servie est terminale (jamais re-stockée).
             $order = $reservation->order()->first();
 
             $voidable = [OrderStatus::Pending, OrderStatus::Confirmed, OrderStatus::Preparing];
@@ -94,6 +82,6 @@ class CancelReservationAction
 
         ReservationCancelled::dispatch($reservation, $cancelledBy);
 
-        return $reservation->load(['participants.user', 'serviceAvailability']);
+        return $reservation->load(['participants.user', 'service']);
     }
 }

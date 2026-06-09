@@ -44,7 +44,7 @@ class TransitionReservationStatusAction
 
         $reservation->refresh();
 
-        return $reservation->load(['serviceAvailability', 'participants.user']);
+        return $reservation->load(['service', 'participants.user']);
     }
 
     /**

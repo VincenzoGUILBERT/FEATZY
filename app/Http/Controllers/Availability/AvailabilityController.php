@@ -2,51 +2,34 @@
 
 namespace App\Http\Controllers\Availability;
 
-use App\Actions\Availability\GenerateServiceAvailabilitiesAction;
-use App\Data\Availability\GenerateAvailabilitiesData;
 use App\Enums\RestaurantStatus;
 use App\Http\Controllers\Controller;
-use App\Http\Requests\Availability\GenerateAvailabilitiesRequest;
-use App\Http\Resources\ServiceAvailabilityResource;
+use App\Http\Requests\Availability\AvailabilityRequest;
+use App\Http\Resources\AvailabilityResource;
 use App\Models\Restaurant;
+use App\Support\Availability\AvailabilityService;
 use Carbon\CarbonImmutable;
-use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
-use Spatie\QueryBuilder\AllowedFilter;
-use Spatie\QueryBuilder\QueryBuilder;
 
 class AvailabilityController extends Controller
 {
     /**
-     * Generate (owner-only) the restaurant's bookable slots from its schedules
-     * and exceptions over the requested range.
+     * Créneaux réservables d'un restaurant publié à une date, pour une taille de groupe
+     * (public). Calculés à la volée : couverts simultanés (chevauchement) + pacing par créneau.
      */
-    public function generate(GenerateAvailabilitiesRequest $request, Restaurant $restaurant, GenerateServiceAvailabilitiesAction $action): JsonResponse
-    {
-        $result = $action->handle($restaurant, GenerateAvailabilitiesData::from($request->validated()));
-
-        return response()->json(['data' => $result->toArray()]);
-    }
-
-    /**
-     * List a published restaurant's upcoming bookable slots (public).
-     */
-    public function index(Request $request, Restaurant $restaurant): AnonymousResourceCollection
+    public function index(AvailabilityRequest $request, Restaurant $restaurant, AvailabilityService $availability): AnonymousResourceCollection
     {
         abort_unless($restaurant->status === RestaurantStatus::Published, 404);
 
-        $availabilities = QueryBuilder::for($restaurant->serviceAvailabilities())
-            ->where('date', '>=', CarbonImmutable::today()->toDateString())
-            ->allowedFilters(
-                AllowedFilter::exact('date'),
-                AllowedFilter::exact('service_type'),
-            )
-            ->defaultSort('date', 'service_type')
-            ->allowedSorts('date', 'service_type')
-            ->paginate()
-            ->appends($request->query());
+        $date = CarbonImmutable::parse($request->validated('date'));
+        $partySize = (int) $request->validated('party_size');
 
-        return ServiceAvailabilityResource::collection($availabilities);
+        $service = $request->filled('service_id')
+            ? $restaurant->services()->active()->findOrFail((int) $request->validated('service_id'))
+            : null;
+
+        $availabilities = $availability->availability($restaurant, $date, $partySize, $service);
+
+        return AvailabilityResource::collection($availabilities);
     }
 }

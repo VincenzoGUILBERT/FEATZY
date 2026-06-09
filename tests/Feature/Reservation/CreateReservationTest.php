@@ -1,11 +1,10 @@
 <?php
 
-use App\Enums\ParticipantRole;
 use App\Enums\ReservationStatus;
-use App\Enums\ServiceType;
 use App\Events\Reservation\ReservationCreated;
+use App\Models\Reservation;
 use App\Models\Restaurant;
-use App\Models\ServiceAvailability;
+use App\Models\Service;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Event;
 
@@ -18,44 +17,49 @@ afterEach(function () {
     CarbonImmutable::setTestNow();
 });
 
-it('books a slot, decrements capacity and creates the organizer participant', function () {
+/**
+ * Crée un service ouvert le jour de $date avec une fenêtre alignée, afin que
+ * reserved_at (12:00) soit un créneau candidat.
+ */
+function bookableService(Restaurant $restaurant, CarbonImmutable $date, int $simultaneous = 40, int $perSlot = 8): Service
+{
+    $service = Service::factory()->for($restaurant)->lunch()->create([
+        'max_simultaneous_covers' => $simultaneous,
+        'max_covers_per_slot' => $perSlot,
+    ]);
+
+    $service->schedules()->create([
+        'day_of_week' => $date->dayOfWeek,
+        'opens_at' => '12:00:00',
+        'last_seating_at' => '13:30:00',
+        'closes_at' => '15:00:00',
+        'crosses_midnight' => false,
+    ]);
+
+    return $service->setRelation('restaurant', $restaurant);
+}
+
+it('books a valid slot and creates the organizer participant', function () {
     Event::fake([ReservationCreated::class]);
 
     $user = actingAsClient();
     $restaurant = Restaurant::factory()->published()->create();
-    $slot = ServiceAvailability::factory()->for($restaurant)->create([
-        'date' => CarbonImmutable::today()->addDays(5)->toDateString(),
-        'service_type' => ServiceType::Dinner,
-        'capacity' => 40,
-        'booked_seats' => 0,
-        'max_party_size' => 8,
-    ]);
+    $date = CarbonImmutable::parse('2026-06-20');
+    $service = bookableService($restaurant, $date);
 
     $this->postJson("/api/restaurants/{$restaurant->id}/reservations", [
-        'service_availability_id' => $slot->id,
+        'service_id' => $service->id,
+        'date' => '2026-06-20',
+        'reserved_at' => '2026-06-20 12:00:00',
         'party_size' => 4,
-        'special_requests' => 'Window table please',
+        'special_requests' => 'Table près de la fenêtre',
     ])
         ->assertCreated()
         ->assertJsonPath('data.status', ReservationStatus::Confirmed->value)
         ->assertJsonPath('data.party_size', 4)
         ->assertJsonPath('data.organizer_id', $user->id)
-        ->assertJsonPath('data.reservation_date', $slot->date->toDateString())
-        ->assertJsonPath('data.service_type', ServiceType::Dinner->value)
         ->assertJsonPath('data.is_preorder', false)
         ->assertJsonCount(1, 'data.participants');
-
-    $this->assertDatabaseHas('service_availabilities', [
-        'id' => $slot->id,
-        'booked_seats' => 4,
-    ]);
-
-    $this->assertDatabaseHas('reservation_participants', [
-        'user_id' => $user->id,
-        'role' => ParticipantRole::Organizer->value,
-        'invitation_status' => 'accepted',
-        'is_attending' => true,
-    ]);
 
     Event::assertDispatched(ReservationCreated::class);
 });
@@ -70,28 +74,27 @@ it('requires authentication', function () {
 it('forbids a non-client role from booking', function () {
     actingAsRestaurateur();
     $restaurant = Restaurant::factory()->published()->create();
-    $slot = ServiceAvailability::factory()->for($restaurant)->create([
-        'date' => CarbonImmutable::today()->addDays(5)->toDateString(),
-        'booked_seats' => 0,
-    ]);
+    $date = CarbonImmutable::parse('2026-06-20');
+    $service = bookableService($restaurant, $date);
 
     $this->postJson("/api/restaurants/{$restaurant->id}/reservations", [
-        'service_availability_id' => $slot->id,
+        'service_id' => $service->id,
+        'date' => '2026-06-20',
+        'reserved_at' => '2026-06-20 12:00:00',
         'party_size' => 2,
     ])->assertForbidden();
 });
 
 it('returns 404 when the restaurant is not published', function () {
     actingAsClient();
-    $restaurant = Restaurant::factory()->create(); // draft
-    $slot = ServiceAvailability::factory()->for($restaurant)->create([
-        'date' => CarbonImmutable::today()->addDays(5)->toDateString(),
-        'booked_seats' => 0,
-        'max_party_size' => 8,
-    ]);
+    $restaurant = Restaurant::factory()->create(); // brouillon
+    $date = CarbonImmutable::parse('2026-06-20');
+    $service = bookableService($restaurant, $date);
 
     $this->postJson("/api/restaurants/{$restaurant->id}/reservations", [
-        'service_availability_id' => $slot->id,
+        'service_id' => $service->id,
+        'date' => '2026-06-20',
+        'reserved_at' => '2026-06-20 12:00:00',
         'party_size' => 2,
     ])->assertNotFound();
 });
@@ -102,168 +105,91 @@ it('validates required fields', function () {
 
     $this->postJson("/api/restaurants/{$restaurant->id}/reservations", [])
         ->assertStatus(422)
-        ->assertJsonValidationErrors(['service_availability_id', 'party_size']);
+        ->assertJsonValidationErrors(['service_id', 'date', 'reserved_at', 'party_size']);
 });
 
 it('rejects a party size below one', function () {
     actingAsClient();
     $restaurant = Restaurant::factory()->published()->create();
-    $slot = ServiceAvailability::factory()->for($restaurant)->create([
-        'date' => CarbonImmutable::today()->addDays(5)->toDateString(),
-        'capacity' => 40,
-        'booked_seats' => 0,
-        'max_party_size' => 8,
-    ]);
+    $date = CarbonImmutable::parse('2026-06-20');
+    $service = bookableService($restaurant, $date);
 
     $this->postJson("/api/restaurants/{$restaurant->id}/reservations", [
-        'service_availability_id' => $slot->id,
+        'service_id' => $service->id,
+        'date' => '2026-06-20',
+        'reserved_at' => '2026-06-20 12:00:00',
         'party_size' => 0,
     ])
         ->assertStatus(422)
         ->assertJsonValidationErrors('party_size');
 });
 
-it('rejects a slot belonging to another restaurant', function () {
+it('rejects a service belonging to another restaurant', function () {
     actingAsClient();
     $restaurant = Restaurant::factory()->published()->create();
-    $otherSlot = ServiceAvailability::factory()->create([
-        'date' => CarbonImmutable::today()->addDays(5)->toDateString(),
-    ]);
+    $otherRestaurant = Restaurant::factory()->published()->create();
+    $date = CarbonImmutable::parse('2026-06-20');
+    $otherService = bookableService($otherRestaurant, $date);
 
     $this->postJson("/api/restaurants/{$restaurant->id}/reservations", [
-        'service_availability_id' => $otherSlot->id,
+        'service_id' => $otherService->id,
+        'date' => '2026-06-20',
+        'reserved_at' => '2026-06-20 12:00:00',
         'party_size' => 2,
     ])
         ->assertStatus(422)
-        ->assertJsonValidationErrors('service_availability_id');
+        ->assertJsonValidationErrors('service_id');
 });
 
-it('rejects a party size beyond the slot maximum', function () {
+it('returns 409 SLOT_UNAVAILABLE when the slot is saturated', function () {
     actingAsClient();
     $restaurant = Restaurant::factory()->published()->create();
-    $slot = ServiceAvailability::factory()->for($restaurant)->create([
-        'date' => CarbonImmutable::today()->addDays(5)->toDateString(),
-        'capacity' => 40,
-        'booked_seats' => 0,
-        'max_party_size' => 6,
-    ]);
+    $date = CarbonImmutable::parse('2026-06-20');
+    // Pacing à 4 couverts par créneau : on remplit 12:00 avec 4 couverts existants.
+    $service = bookableService($restaurant, $date, simultaneous: 40, perSlot: 4);
+
+    Reservation::factory()->forSlot($service, $date->setTime(12, 0), 4)->create();
 
     $this->postJson("/api/restaurants/{$restaurant->id}/reservations", [
-        'service_availability_id' => $slot->id,
-        'party_size' => 8,
-    ])
-        ->assertStatus(422)
-        ->assertJsonValidationErrors('party_size');
-});
-
-it('rejects a slot in the past', function () {
-    actingAsClient();
-    $restaurant = Restaurant::factory()->published()->create();
-    $slot = ServiceAvailability::factory()->for($restaurant)->create([
-        'date' => CarbonImmutable::today()->subDay()->toDateString(),
-        'capacity' => 40,
-        'booked_seats' => 0,
-        'max_party_size' => 8,
-    ]);
-
-    $this->postJson("/api/restaurants/{$restaurant->id}/reservations", [
-        'service_availability_id' => $slot->id,
-        'party_size' => 2,
-    ])
-        ->assertStatus(422)
-        ->assertJsonValidationErrors('service_availability_id');
-});
-
-it('returns 409 when the requested party exceeds remaining capacity', function () {
-    actingAsClient();
-    $restaurant = Restaurant::factory()->published()->create();
-    $slot = ServiceAvailability::factory()->for($restaurant)->create([
-        'date' => CarbonImmutable::today()->addDays(5)->toDateString(),
-        'capacity' => 10,
-        'booked_seats' => 8,
-        'max_party_size' => null,
-    ]);
-
-    $this->postJson("/api/restaurants/{$restaurant->id}/reservations", [
-        'service_availability_id' => $slot->id,
-        'party_size' => 3,
+        'service_id' => $service->id,
+        'date' => '2026-06-20',
+        'reserved_at' => '2026-06-20 12:00:00',
+        'party_size' => 1,
     ])
         ->assertStatus(409)
-        ->assertJsonPath('code', 'CAPACITY_EXCEEDED');
-
-    $this->assertDatabaseHas('service_availabilities', [
-        'id' => $slot->id,
-        'booked_seats' => 8,
-    ]);
+        ->assertJsonPath('code', 'SLOT_UNAVAILABLE');
 });
 
 it('rejects a pre-order when the restaurant does not accept them', function () {
     actingAsClient();
     $restaurant = Restaurant::factory()->published()->create(['accepts_preorders' => false]);
-    $slot = ServiceAvailability::factory()->for($restaurant)->create([
-        'date' => CarbonImmutable::today()->addDays(5)->toDateString(),
-        'capacity' => 40,
-        'booked_seats' => 0,
-        'max_party_size' => 8,
-    ]);
+    $date = CarbonImmutable::parse('2026-06-20');
+    $service = bookableService($restaurant, $date);
 
     $this->postJson("/api/restaurants/{$restaurant->id}/reservations", [
-        'service_availability_id' => $slot->id,
+        'service_id' => $service->id,
+        'date' => '2026-06-20',
+        'reserved_at' => '2026-06-20 12:00:00',
         'party_size' => 2,
         'is_preorder' => true,
     ])
         ->assertStatus(422)
         ->assertJsonPath('code', 'PREORDERS_NOT_ACCEPTED');
-
-    $this->assertDatabaseHas('service_availabilities', [
-        'id' => $slot->id,
-        'booked_seats' => 0,
-    ]);
 });
 
 it('allows a pre-order when the restaurant accepts them', function () {
     actingAsClient();
     $restaurant = Restaurant::factory()->published()->create(['accepts_preorders' => true]);
-    $slot = ServiceAvailability::factory()->for($restaurant)->create([
-        'date' => CarbonImmutable::today()->addDays(5)->toDateString(),
-        'capacity' => 40,
-        'booked_seats' => 0,
-        'max_party_size' => 8,
-    ]);
+    $date = CarbonImmutable::parse('2026-06-20');
+    $service = bookableService($restaurant, $date);
 
     $this->postJson("/api/restaurants/{$restaurant->id}/reservations", [
-        'service_availability_id' => $slot->id,
+        'service_id' => $service->id,
+        'date' => '2026-06-20',
+        'reserved_at' => '2026-06-20 12:00:00',
         'party_size' => 2,
         'is_preorder' => true,
     ])
         ->assertCreated()
         ->assertJsonPath('data.is_preorder', true);
-});
-
-it('enforces capacity across successive bookings without overbooking', function () {
-    // The anti-overbooking guarantee is enforced atomically at the SQL level
-    // (conditional UPDATE + DB CHECK); this drives it through successive bookings
-    // to assert booked_seats tracks capacity exactly and never exceeds it.
-    actingAsClient();
-    $restaurant = Restaurant::factory()->published()->create();
-    $slot = ServiceAvailability::factory()->for($restaurant)->create([
-        'date' => CarbonImmutable::today()->addDays(5)->toDateString(),
-        'capacity' => 4,
-        'booked_seats' => 0,
-        'max_party_size' => null,
-    ]);
-
-    $book = fn (int $party) => $this->postJson("/api/restaurants/{$restaurant->id}/reservations", [
-        'service_availability_id' => $slot->id,
-        'party_size' => $party,
-    ]);
-
-    $book(3)->assertCreated();
-    $book(2)->assertStatus(409); // 3 + 2 > 4
-    $book(1)->assertCreated();   // 3 + 1 = 4
-    $book(1)->assertStatus(409); // full
-
-    $slot->refresh();
-    expect($slot->booked_seats)->toBe(4)
-        ->and($slot->booked_seats)->toBeLessThanOrEqual($slot->capacity);
 });

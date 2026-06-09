@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Spatie\MediaLibrary\HasMedia;
 use Spatie\MediaLibrary\InteractsWithMedia;
@@ -34,6 +35,11 @@ class Restaurant extends Model implements HasMedia
             'accepts_online_payment' => 'boolean',
             'cancellation_deadline_hours' => 'integer',
             'booking_horizon_days' => 'integer',
+            'default_seating_duration_minutes' => 'integer',
+            'slot_interval_minutes' => 'integer',
+            'min_lead_time_minutes' => 'integer',
+            'min_party_size' => 'integer',
+            'max_party_size' => 'integer',
             'reviews_count' => 'integer',
             'latitude' => 'decimal:7',
             'longitude' => 'decimal:7',
@@ -137,11 +143,21 @@ class Restaurant extends Model implements HasMedia
     }
 
     /**
-     * @return HasMany<ServiceSchedule, $this>
+     * @return HasMany<Service, $this>
      */
-    public function serviceSchedules(): HasMany
+    public function services(): HasMany
     {
-        return $this->hasMany(ServiceSchedule::class);
+        return $this->hasMany(Service::class);
+    }
+
+    /**
+     * Horaires de tous les services du restaurant (traversant la table services).
+     *
+     * @return HasManyThrough<ServiceSchedule, Service, $this>
+     */
+    public function serviceSchedules(): HasManyThrough
+    {
+        return $this->hasManyThrough(ServiceSchedule::class, Service::class);
     }
 
     /**
@@ -150,14 +166,6 @@ class Restaurant extends Model implements HasMedia
     public function scheduleExceptions(): HasMany
     {
         return $this->hasMany(ScheduleException::class);
-    }
-
-    /**
-     * @return HasMany<ServiceAvailability, $this>
-     */
-    public function serviceAvailabilities(): HasMany
-    {
-        return $this->hasMany(ServiceAvailability::class);
     }
 
     /**

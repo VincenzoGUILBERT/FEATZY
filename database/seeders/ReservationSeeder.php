@@ -6,499 +6,310 @@ use App\Enums\InvitationStatus;
 use App\Enums\ParticipantRole;
 use App\Enums\ReservationStatus;
 use App\Enums\RestaurantStatus;
-use App\Enums\ServiceType;
 use App\Models\Reservation;
-use App\Models\ReservationParticipant;
 use App\Models\Restaurant;
-use App\Models\ScheduleException;
-use App\Models\ServiceAvailability;
-use App\Models\ServiceSchedule;
+use App\Models\Service;
 use App\Models\User;
 use Carbon\CarbonImmutable;
-use Faker\Generator;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
+/**
+ * Seed de réservations aligné sur le nouveau modèle par créneau (plus de
+ * ServiceAvailability ni de compteur booked_seats). Pour chaque restaurant publié
+ * disposant de services avec horaires, on pose quelques réservations confirmées (et
+ * quelques-unes complétées dans le passé) sur des créneaux alignés et valides, en
+ * restant volontairement conservateur sur l'occupation par créneau et par salle.
+ */
 class ReservationSeeder extends Seeder
 {
     /**
-     * Reference "today" for the dataset.
+     * "Aujourd'hui" de référence du jeu de données (déterministe).
      */
     private CarbonImmutable $today;
 
     /**
-     * Published restaurants eligible for reservations.
-     *
-     * @var Collection<int, Restaurant>
-     */
-    private Collection $restaurants;
-
-    /**
-     * All clients available as organizers and guests.
+     * Clients disponibles comme organisateurs.
      *
      * @var Collection<int, User>
      */
     private Collection $clients;
 
     /**
-     * Cache of active service schedules keyed by
-     * "{restaurant_id}-{day_of_week}-{service_type}".
+     * Couverts déjà posés par bucket d'arrivée, clé "{service_id}-{Y-m-d H:i}".
      *
-     * @var array<string, ServiceSchedule|null>
+     * @var array<string, int>
      */
-    private array $scheduleCache = [];
+    private array $perSlotCovers = [];
 
     /**
-     * Cache of schedule exceptions keyed by "{restaurant_id}-{Y-m-d}".
+     * Couverts présents par pool sur un créneau, clé "{restaurant_id}-{pool}-{Y-m-d H:i}".
      *
-     * @var array<string, Collection<int, ScheduleException>>
+     * @var array<string, int>
      */
-    private array $exceptionCache = [];
+    private array $poolCovers = [];
 
     /**
-     * Cache of service availabilities keyed by
-     * "{restaurant_id}-{Y-m-d}-{service_type}".
+     * Tailles de groupe possibles (petits groupes pour rester conservateur).
      *
-     * @var array<string, ServiceAvailability>
+     * @var list<int>
      */
-    private array $availabilityCache = [];
+    private array $partySizes = [2, 2, 3, 4];
 
     /**
-     * Realistic French special requests for some reservations.
+     * Quelques demandes spéciales en français.
      *
      * @var list<string>
      */
     private array $specialRequests = [
         'Table près de la fenêtre si possible.',
         'Nous fêtons un anniversaire, merci pour la petite attention.',
-        'Une personne en fauteuil roulant, accès PMR souhaité.',
         'Chaise haute pour un enfant, merci.',
         'Plutôt une table calme, à l’écart si vous pouvez.',
-        'Allergie à l’arachide pour un convive, soyez vigilants svp.',
-        'Repas d’affaires, nous aurons besoin d’un peu de tranquillité.',
-        'Si possible en terrasse, sinon à l’intérieur ce sera parfait.',
     ];
 
     /**
-     * Realistic French cancellation reasons.
-     *
-     * @var list<string>
-     */
-    private array $cancellationReasons = [
-        'Empêchement de dernière minute.',
-        'Changement de programme imprévu.',
-        'Un des convives est souffrant.',
-        'Problème de transport.',
-        'Report du dîner à une autre date.',
-        'Erreur sur le nombre de couverts.',
-    ];
-
-    /**
-     * Seed reservations, participants and the matching availabilities.
+     * Crée des réservations cohérentes pour les restaurants publiés.
      */
     public function run(): void
     {
-        $this->today = CarbonImmutable::parse('2026-06-06');
-
-        $this->restaurants = Restaurant::query()
-            ->where('status', RestaurantStatus::Published)
-            ->get();
-
+        $this->today = CarbonImmutable::parse('2026-06-06')->startOfDay();
         $this->clients = User::role('client')->get();
 
-        if ($this->restaurants->isEmpty() || $this->clients->count() < 2) {
+        if ($this->clients->isEmpty()) {
             return;
         }
 
-        $faker = fake('fr_FR');
-        $targetReservations = $faker->numberBetween(90, 115);
+        $restaurants = Restaurant::query()
+            ->where('status', RestaurantStatus::Published)
+            ->with(['services' => fn ($query) => $query->where('is_active', true)->with('schedules')])
+            ->orderBy('id')
+            ->get();
 
-        $created = 0;
-        $attempts = 0;
-        $maxAttempts = $targetReservations * 8;
+        foreach ($restaurants as $restaurant) {
+            $this->seedRestaurant($restaurant);
+        }
+    }
 
-        while ($created < $targetReservations && $attempts < $maxAttempts) {
-            $attempts++;
+    /**
+     * Pose quelques réservations pour un restaurant donné.
+     */
+    private function seedRestaurant(Restaurant $restaurant): void
+    {
+        $services = $restaurant->services
+            ->filter(fn (Service $service): bool => $service->schedules->isNotEmpty());
 
-            if ($this->attemptReservation($faker)) {
-                $created++;
+        if ($services->isEmpty()) {
+            return;
+        }
+
+        // Fenêtre de dates : quelques jours dans le passé (complétées) et quelques
+        // jours proches dans le futur (confirmées), bornée par l'horizon de réservation.
+        $horizon = min((int) $restaurant->booking_horizon_days, 21);
+
+        for ($offset = -10; $offset <= $horizon; $offset += 3) {
+            $date = $this->today->addDays($offset);
+            $isPast = $offset < 0;
+
+            foreach ($services as $service) {
+                $service->setRelation('restaurant', $restaurant);
+                $this->seedServiceDay($restaurant, $service, $date, $isPast);
             }
         }
     }
 
     /**
-     * Try to build a single coherent reservation. Returns true on success.
+     * Pose 0 à 2 réservations sur un service un jour donné, si un horaire existe.
      */
-    private function attemptReservation(Generator $faker): bool
+    private function seedServiceDay(Restaurant $restaurant, Service $service, CarbonImmutable $date, bool $isPast): void
     {
-        /** @var Restaurant $restaurant */
-        $restaurant = $this->restaurants->random();
-
-        $date = $this->randomReservationDate($faker, $restaurant);
-        $serviceType = $faker->randomElement([ServiceType::Lunch, ServiceType::Dinner]);
-
-        $schedule = $this->resolveSchedule($restaurant, $date, $serviceType);
+        $schedule = $service->schedules
+            ->firstWhere(fn ($candidate): bool => (int) $candidate->day_of_week->value === (int) $date->dayOfWeek);
 
         if ($schedule === null) {
-            return false;
+            return;
         }
 
-        $exceptions = $this->resolveExceptions($restaurant, $date);
-        $matchingException = $this->matchException($exceptions, $serviceType);
+        $slots = $this->candidateSlots($service, $schedule, $date);
 
-        if ($matchingException !== null && $matchingException->is_closed) {
-            return false;
+        if ($slots === []) {
+            return;
         }
 
-        $capacity = $matchingException?->capacity ?? $schedule->capacity;
-        $maxParty = $matchingException?->max_party_size ?? $schedule->max_party_size;
+        $duration = $service->effectiveSeatingDuration();
+        $maxPerSlot = (int) $service->max_covers_per_slot;
+        $maxSimultaneous = (int) $service->max_simultaneous_covers;
 
-        if ($capacity < 1 || $maxParty < 1) {
-            return false;
-        }
+        // Au plus deux réservations par (service, jour) : on reste large.
+        $bookings = $isPast ? 1 : (($date->day % 2 === 0) ? 2 : 1);
 
-        $availability = $this->resolveAvailability($restaurant, $date, $serviceType, $capacity, $maxParty);
+        for ($index = 0; $index < $bookings; $index++) {
+            $slot = $slots[($date->day + $index) % count($slots)];
+            $partySize = $this->partySizes[($service->id + $index) % count($this->partySizes)];
 
-        $partySize = $faker->numberBetween(1, min((int) $maxParty, 6));
-
-        $status = $this->resolveStatus($faker, $date);
-        $countsTowardCapacity = $this->statusCountsTowardCapacity($status);
-
-        if ($countsTowardCapacity && ($availability->booked_seats + $partySize) > $availability->capacity) {
-            return false;
-        }
-
-        $guestsNeeded = $partySize - 1;
-
-        if ($guestsNeeded > ($this->clients->count() - 1)) {
-            return false;
-        }
-
-        return DB::transaction(function () use (
-            $faker,
-            $restaurant,
-            $availability,
-            $date,
-            $serviceType,
-            $partySize,
-            $status,
-            $countsTowardCapacity,
-            $guestsNeeded,
-        ): bool {
-            $organizer = $this->clients->random();
-
-            $isPreorder = $restaurant->accepts_preorders
-                && in_array($status, [
-                    ReservationStatus::Confirmed,
-                    ReservationStatus::Seated,
-                    ReservationStatus::Completed,
-                ], true)
-                && $faker->boolean(50);
-
-            $expectedArrival = $faker->boolean(70)
-                ? $this->expectedArrivalTime($faker, $serviceType)
-                : null;
-
-            $attributes = [
-                'public_uuid' => (string) Str::uuid(),
-                'restaurant_id' => $restaurant->id,
-                'service_availability_id' => $availability->id,
-                'organizer_id' => $organizer->id,
-                'reservation_date' => $date->toDateString(),
-                'service_type' => $serviceType,
-                'party_size' => $partySize,
-                'status' => $status,
-                'is_preorder' => $isPreorder,
-                'special_requests' => $faker->boolean(30) ? $faker->randomElement($this->specialRequests) : null,
-                'expected_arrival_time' => $expectedArrival,
-            ];
-
-            $this->applyStatusTimestamps($attributes, $status, $date, $serviceType, $organizer->id, $faker);
-
-            /** @var Reservation $reservation */
-            $reservation = Reservation::query()->create($attributes);
-
-            if ($countsTowardCapacity) {
-                $availability->increment('booked_seats', $partySize);
+            if (! $this->slotHasRoom($restaurant, $service, $slot, $partySize, $duration, $maxPerSlot, $maxSimultaneous)) {
+                continue;
             }
 
-            $this->createParticipants($faker, $reservation, $organizer, $guestsNeeded, $status);
+            $organizer = $this->clients[($service->id + $date->day + $index) % $this->clients->count()];
 
-            return true;
-        });
-    }
-
-    /**
-     * Pick a reservation date between 2026-04 (past) and the booking horizon (future).
-     */
-    private function randomReservationDate(Generator $faker, Restaurant $restaurant): CarbonImmutable
-    {
-        $start = CarbonImmutable::parse('2026-04-01');
-
-        $horizon = $this->today->addDays(min((int) $restaurant->booking_horizon_days, 75));
-        $end = $horizon->lessThan(CarbonImmutable::parse('2026-08-31'))
-            ? $horizon
-            : CarbonImmutable::parse('2026-08-31');
-
-        $totalDays = max(1, $start->diffInDays($end));
-
-        return $start->addDays($faker->numberBetween(0, (int) $totalDays))->startOfDay();
-    }
-
-    /**
-     * Find the active service schedule for the restaurant on the given date/service.
-     */
-    private function resolveSchedule(Restaurant $restaurant, CarbonImmutable $date, ServiceType $serviceType): ?ServiceSchedule
-    {
-        $dayOfWeek = (int) $date->dayOfWeek; // Carbon: 0 = Sunday .. 6 = Saturday
-        $key = "{$restaurant->id}-{$dayOfWeek}-{$serviceType->value}";
-
-        if (! array_key_exists($key, $this->scheduleCache)) {
-            $this->scheduleCache[$key] = ServiceSchedule::query()
-                ->where('restaurant_id', $restaurant->id)
-                ->where('day_of_week', $dayOfWeek)
-                ->where('service_type', $serviceType->value)
-                ->where('is_active', true)
-                ->first();
+            $this->createReservation($restaurant, $service, $organizer, $slot, $partySize, $duration, $isPast, $index);
+            $this->reserveCapacity($restaurant, $service, $slot, $partySize, $duration);
         }
-
-        return $this->scheduleCache[$key];
     }
 
     /**
-     * Load schedule exceptions for the restaurant on the given date.
+     * Heures de créneaux candidates dans la fenêtre du service (opens_at, +intervalle…
+     * jusqu'à last_seating_at inclus), alignées sur la grille. Hors services à cheval
+     * sur minuit pour rester simple.
      *
-     * @return Collection<int, ScheduleException>
+     * @return list<CarbonImmutable>
      */
-    private function resolveExceptions(Restaurant $restaurant, CarbonImmutable $date): Collection
+    private function candidateSlots(Service $service, $schedule, CarbonImmutable $date): array
     {
-        $key = "{$restaurant->id}-{$date->toDateString()}";
-
-        if (! array_key_exists($key, $this->exceptionCache)) {
-            $this->exceptionCache[$key] = ScheduleException::query()
-                ->where('restaurant_id', $restaurant->id)
-                ->whereDate('date', $date->toDateString())
-                ->get();
+        if ($schedule->crosses_midnight) {
+            return [];
         }
 
-        return $this->exceptionCache[$key];
+        $interval = $service->effectiveSlotInterval();
+        $opens = $this->timeOn($date, (string) $schedule->opens_at);
+        $lastSeating = $this->timeOn($date, (string) $schedule->last_seating_at);
+
+        $slots = [];
+        $cursor = $opens;
+
+        while ($cursor->lessThanOrEqualTo($lastSeating)) {
+            $slots[] = $cursor;
+            $cursor = $cursor->addMinutes($interval);
+        }
+
+        return $slots;
     }
 
     /**
-     * Resolve the most specific exception (service-scoped first, then whole-day).
-     *
-     * @param  Collection<int, ScheduleException>  $exceptions
+     * Compose un datetime local à partir d'une heure "HH:MM[:SS]" sur la date donnée.
      */
-    private function matchException(Collection $exceptions, ServiceType $serviceType): ?ScheduleException
+    private function timeOn(CarbonImmutable $date, string $time): CarbonImmutable
     {
-        $serviceScoped = $exceptions->firstWhere('service_type', $serviceType);
+        [$hour, $minute] = array_map('intval', explode(':', $time));
 
-        if ($serviceScoped !== null) {
-            return $serviceScoped;
-        }
-
-        return $exceptions->firstWhere('service_type', null);
+        return $date->setTime($hour, $minute);
     }
 
     /**
-     * Get or create the service availability bucket for the slot.
+     * Vrai si le créneau peut accueillir le groupe sans dépasser le pacing ni la salle.
      */
-    private function resolveAvailability(
+    private function slotHasRoom(
         Restaurant $restaurant,
-        CarbonImmutable $date,
-        ServiceType $serviceType,
-        int $capacity,
-        int $maxParty,
-    ): ServiceAvailability {
-        $key = "{$restaurant->id}-{$date->toDateString()}-{$serviceType->value}";
+        Service $service,
+        CarbonImmutable $slot,
+        int $partySize,
+        int $duration,
+        int $maxPerSlot,
+        int $maxSimultaneous,
+    ): bool {
+        $slotKey = "{$service->id}-{$slot->format('Y-m-d H:i')}";
 
-        if (! array_key_exists($key, $this->availabilityCache)) {
-            $this->availabilityCache[$key] = ServiceAvailability::query()->firstOrCreate(
-                [
-                    'restaurant_id' => $restaurant->id,
-                    'date' => $date->toDateString(),
-                    'service_type' => $serviceType->value,
-                ],
-                [
-                    'capacity' => $capacity,
-                    'booked_seats' => 0,
-                    'max_party_size' => $maxParty,
-                ],
-            );
+        if (($this->perSlotCovers[$slotKey] ?? 0) + $partySize > $maxPerSlot) {
+            return false;
         }
 
-        return $this->availabilityCache[$key];
+        // Approximation conservatrice de l'occupation simultanée : couverts présents
+        // sur les buckets chevauchant [slot, slot + durée).
+        $present = $this->overlappingPoolCovers($restaurant, $service, $slot, $duration);
+
+        return $present + $partySize <= $maxSimultaneous;
     }
 
     /**
-     * Decide a status weighted by whether the date is in the past or future.
+     * Somme des couverts du même pool dont l'occupation chevauche [slot, slot + durée).
      */
-    private function resolveStatus(Generator $faker, CarbonImmutable $date): ReservationStatus
+    private function overlappingPoolCovers(Restaurant $restaurant, Service $service, CarbonImmutable $slot, int $duration): int
     {
-        $isPast = $date->lessThan($this->today->startOfDay());
+        $end = $slot->addMinutes($duration);
+        $present = 0;
 
-        if ($isPast) {
-            $roll = $faker->numberBetween(1, 100);
+        foreach ($this->poolCovers as $key => $covers) {
+            $prefix = "{$restaurant->id}-{$service->capacity_pool_key}-";
 
-            return match (true) {
-                $roll <= 78 => ReservationStatus::Completed,
-                $roll <= 88 => ReservationStatus::NoShow,
-                default => ReservationStatus::Cancelled,
-            };
+            if (! str_starts_with($key, $prefix)) {
+                continue;
+            }
+
+            $bucket = CarbonImmutable::parse(substr($key, strlen($prefix)));
+
+            if ($bucket->lessThan($end) && $bucket->addMinutes($duration)->greaterThan($slot)) {
+                $present += $covers;
+            }
         }
 
-        return $faker->numberBetween(1, 100) <= 85
-            ? ReservationStatus::Confirmed
-            : ReservationStatus::Cancelled;
+        return $present;
     }
 
     /**
-     * Statuses that consume seats from the availability bucket.
+     * Mémorise les couverts posés (pacing + occupation du pool).
      */
-    private function statusCountsTowardCapacity(ReservationStatus $status): bool
+    private function reserveCapacity(Restaurant $restaurant, Service $service, CarbonImmutable $slot, int $partySize, int $duration): void
     {
-        return in_array($status, [
-            ReservationStatus::Confirmed,
-            ReservationStatus::Seated,
-            ReservationStatus::Completed,
-            ReservationStatus::NoShow,
-        ], true);
+        $slotKey = "{$service->id}-{$slot->format('Y-m-d H:i')}";
+        $poolKey = "{$restaurant->id}-{$service->capacity_pool_key}-{$slot->format('Y-m-d H:i')}";
+
+        $this->perSlotCovers[$slotKey] = ($this->perSlotCovers[$slotKey] ?? 0) + $partySize;
+        $this->poolCovers[$poolKey] = ($this->poolCovers[$poolKey] ?? 0) + $partySize;
     }
 
     /**
-     * Fill the status-driven timestamps and cancellation metadata.
-     *
-     * @param  array<string, mixed>  $attributes
+     * Crée la réservation et son participant organisateur, comme CreateReservationAction.
      */
-    private function applyStatusTimestamps(
-        array &$attributes,
-        ReservationStatus $status,
-        CarbonImmutable $date,
-        ServiceType $serviceType,
-        int $organizerId,
-        Generator $faker,
-    ): void {
-        $serviceStart = $serviceType === ServiceType::Lunch ? 12 : 20;
-        $seatedAt = $date->setTime($serviceStart, $faker->randomElement([0, 15, 30]));
-
-        if ($status === ReservationStatus::Completed) {
-            $attributes['seated_at'] = $seatedAt;
-            $attributes['completed_at'] = $seatedAt->addMinutes($faker->numberBetween(75, 150));
-
-            return;
-        }
-
-        if ($status === ReservationStatus::Seated) {
-            $attributes['seated_at'] = $seatedAt;
-
-            return;
-        }
-
-        if ($status === ReservationStatus::Cancelled) {
-            $attributes['cancelled_at'] = $this->cancellationMoment($faker, $date);
-            $attributes['cancelled_by_id'] = $organizerId;
-            $attributes['cancellation_reason'] = $faker->randomElement($this->cancellationReasons);
-        }
-    }
-
-    /**
-     * A plausible cancellation timestamp before the reservation date.
-     */
-    private function cancellationMoment(Generator $faker, CarbonImmutable $date): Carbon
-    {
-        $candidate = $date->subDays($faker->numberBetween(0, 3))
-            ->setTime($faker->numberBetween(8, 22), $faker->randomElement([0, 15, 30, 45]));
-
-        if ($candidate->greaterThan($this->today)) {
-            $candidate = $this->today->subDays($faker->numberBetween(0, 2))
-                ->setTime($faker->numberBetween(8, 22), 0);
-        }
-
-        return Carbon::instance($candidate->toDateTime());
-    }
-
-    /**
-     * Expected arrival within the service window.
-     */
-    private function expectedArrivalTime(Generator $faker, ServiceType $serviceType): string
-    {
-        $hour = $serviceType === ServiceType::Lunch
-            ? $faker->numberBetween(12, 13)
-            : $faker->numberBetween(19, 21);
-
-        $minute = $faker->randomElement([0, 15, 30, 45]);
-
-        return sprintf('%02d:%02d:00', $hour, $minute);
-    }
-
-    /**
-     * Create the organizer participant and the distinct guest participants.
-     */
-    private function createParticipants(
-        Generator $faker,
-        Reservation $reservation,
+    private function createReservation(
+        Restaurant $restaurant,
+        Service $service,
         User $organizer,
-        int $guestsNeeded,
-        ReservationStatus $status,
+        CarbonImmutable $slot,
+        int $partySize,
+        int $duration,
+        bool $isPast,
+        int $index,
     ): void {
-        $isCompleted = $status === ReservationStatus::Completed;
+        DB::transaction(function () use ($restaurant, $service, $organizer, $slot, $partySize, $duration, $isPast, $index): void {
+            $end = $slot->addMinutes($duration);
 
-        ReservationParticipant::query()->create([
-            'reservation_id' => $reservation->id,
-            'user_id' => $organizer->id,
-            'role' => ParticipantRole::Organizer,
-            'invitation_status' => InvitationStatus::Accepted,
-            'responded_at' => $reservation->created_at ?? now(),
-            'is_attending' => $isCompleted ? true : null,
-        ]);
+            $status = $isPast ? ReservationStatus::Completed : ReservationStatus::Confirmed;
 
-        if ($guestsNeeded < 1) {
-            return;
-        }
+            // Quelques réservations futures deviennent des pré-commandes lorsque le
+            // restaurant les accepte (alimente PreOrderSeeder / Payment / Order).
+            $isPreorder = ! $isPast && $restaurant->accepts_preorders && $index === 0;
 
-        $guests = $this->clients
-            ->reject(fn (User $client): bool => $client->id === $organizer->id)
-            ->shuffle()
-            ->take($guestsNeeded);
+            $attributes = [
+                'service_id' => $service->id,
+                'organizer_id' => $organizer->id,
+                'party_size' => $partySize,
+                'reserved_at' => $slot,
+                'slot_at' => $slot,
+                'ends_at' => $end,
+                'seating_duration_minutes' => $duration,
+                'capacity_pool_key' => $service->capacity_pool_key,
+                'status' => $status->value,
+                'is_preorder' => $isPreorder,
+                'special_requests' => $index === 0 ? $this->specialRequests[$service->id % count($this->specialRequests)] : null,
+            ];
 
-        foreach ($guests as $guest) {
-            $invitationStatus = $this->resolveInvitationStatus($faker);
+            if ($status === ReservationStatus::Completed) {
+                $attributes['seated_at'] = $slot;
+                $attributes['completed_at'] = $end;
+            }
 
-            $respondedAt = $invitationStatus === InvitationStatus::Pending
-                ? null
-                : ($reservation->created_at ?? now());
+            /** @var Reservation $reservation */
+            $reservation = $restaurant->reservations()->create($attributes);
 
-            $isAttending = match (true) {
-                $isCompleted && $invitationStatus === InvitationStatus::Accepted => true,
-                $invitationStatus === InvitationStatus::Declined => false,
-                default => null,
-            };
-
-            ReservationParticipant::query()->create([
-                'reservation_id' => $reservation->id,
-                'user_id' => $guest->id,
-                'role' => ParticipantRole::Guest,
-                'invitation_status' => $invitationStatus,
-                'responded_at' => $respondedAt,
-                'is_attending' => $isAttending,
+            $reservation->participants()->create([
+                'user_id' => $organizer->id,
+                'role' => ParticipantRole::Organizer->value,
+                'invitation_status' => InvitationStatus::Accepted->value,
+                'responded_at' => now(),
+                'is_attending' => true,
             ]);
-        }
-    }
-
-    /**
-     * Weighted guest invitation status: mostly accepted, some pending/declined.
-     */
-    private function resolveInvitationStatus(Generator $faker): InvitationStatus
-    {
-        $roll = $faker->numberBetween(1, 100);
-
-        return match (true) {
-            $roll <= 75 => InvitationStatus::Accepted,
-            $roll <= 90 => InvitationStatus::Pending,
-            default => InvitationStatus::Declined,
-        };
+        });
     }
 }
