@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Database\Factories\MenuItemOptionFactory;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -15,6 +16,11 @@ class MenuItemOption extends Model
     protected $guarded = [];
 
     /**
+     * @var list<string>
+     */
+    protected $appends = ['is_sold_out'];
+
+    /**
      * @return array<string, string>
      */
     protected function casts(): array
@@ -25,6 +31,19 @@ class MenuItemOption extends Model
             'is_available' => 'boolean',
             'position' => 'integer',
         ];
+    }
+
+    /**
+     * Derived sold-out flag: a tracked stock that has run out.
+     * A null stock means untracked/unlimited, never sold out.
+     *
+     * @return Attribute<bool, never>
+     */
+    protected function isSoldOut(): Attribute
+    {
+        return Attribute::make(
+            get: fn (): bool => $this->stock_quantity !== null && $this->stock_quantity <= 0,
+        )->shouldCache();
     }
 
     /**

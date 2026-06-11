@@ -74,6 +74,16 @@ it('updates an option', function () {
         ->assertJsonPath('data.is_available', false);
 });
 
+it('derives is_sold_out from the tracked stock', function () {
+    $group = ownedOptionGroupForOptions();
+    $option = MenuItemOption::factory()->for($group, 'group')->create(['stock_quantity' => null]);
+
+    $this->patchJson("/api/menu-item-options/{$option->id}", ['stock_quantity' => 0])
+        ->assertOk()
+        ->assertJsonPath('data.stock_quantity', 0)
+        ->assertJsonPath('data.is_sold_out', true);
+});
+
 it('deletes an option', function () {
     $group = ownedOptionGroupForOptions();
     $option = MenuItemOption::factory()->for($group, 'group')->create();

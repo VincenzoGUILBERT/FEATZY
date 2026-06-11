@@ -35,7 +35,16 @@ class User extends Authenticatable implements HasMedia, MustVerifyEmail
         'email',
         'password',
         'phone',
+        'dietary_preferences',
+        'notification_preferences',
     ];
+
+    /**
+     * Canonical notification channels (all default to enabled).
+     *
+     * @var list<string>
+     */
+    public const NOTIFICATION_PREFERENCES = ['email', 'push', 'important_updates', 'promotions'];
 
     /**
      * Get the attributes that should be cast.
@@ -48,6 +57,8 @@ class User extends Authenticatable implements HasMedia, MustVerifyEmail
             'email_verified_at' => 'datetime',
             'deleted_at' => 'datetime',
             'password' => 'hashed',
+            'dietary_preferences' => 'array',
+            'notification_preferences' => 'array',
         ];
     }
 
@@ -59,6 +70,20 @@ class User extends Authenticatable implements HasMedia, MustVerifyEmail
     protected function name(): Attribute
     {
         return Attribute::get(fn (): string => trim("{$this->first_name} {$this->last_name}"));
+    }
+
+    /**
+     * Notification settings normalized to every channel (missing keys default to true).
+     *
+     * @return array<string, bool>
+     */
+    public function notificationPreferences(): array
+    {
+        $stored = $this->notification_preferences ?? [];
+
+        return collect(self::NOTIFICATION_PREFERENCES)
+            ->mapWithKeys(fn (string $key): array => [$key => (bool) ($stored[$key] ?? true)])
+            ->all();
     }
 
     /**

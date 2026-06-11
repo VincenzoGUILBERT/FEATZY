@@ -24,7 +24,11 @@ test('an authenticated restaurateur can list allergens', function (): void {
         ->assertJsonStructure(['data' => [['id', 'name', 'icon', 'position']]]);
 });
 
-test('guests cannot list reference catalogues', function (): void {
-    $this->getJson('/api/cuisine-types')->assertUnauthorized();
-    $this->getJson('/api/allergens')->assertUnauthorized();
+test('guests can list reference catalogues', function (): void {
+    CuisineType::factory()->create(['is_active' => true]);
+    Allergen::factory()->create();
+
+    $this->getJson('/api/cuisine-types')->assertOk();
+    $this->getJson('/api/allergens')->assertOk();
+    $this->getJson('/api/dietary-preferences')->assertOk();
 });

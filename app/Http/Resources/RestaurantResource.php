@@ -40,6 +40,20 @@ class RestaurantResource extends JsonResource
             'reviews_count' => $this->reviews_count,
             'is_favorited' => $this->whenHas('is_favorited', fn (): bool => (bool) $this->is_favorited),
             'cuisine_types' => CuisineTypeResource::collection($this->whenLoaded('cuisineTypes')),
+            'opening_hours' => $this->whenLoaded('services', fn () => $this->services
+                ->where('is_active', true)
+                ->flatMap(fn ($service) => $service->schedules->map(fn ($schedule): array => [
+                    'day_of_week' => $schedule->day_of_week->value,
+                    'day_name' => $schedule->day_of_week->label(),
+                    'opens_at' => $schedule->opens_at,
+                    'last_seating_at' => $schedule->last_seating_at,
+                    'closes_at' => $schedule->closes_at,
+                    'crosses_midnight' => $schedule->crosses_midnight,
+                    'service_name' => $service->name,
+                ]))
+                ->sortBy(['day_of_week', 'opens_at'])
+                ->values()
+                ->all()),
             'media' => [
                 'logo' => $this->getFirstMediaUrl('logo') ?: null,
                 'cover' => $this->getFirstMediaUrl('cover') ?: null,

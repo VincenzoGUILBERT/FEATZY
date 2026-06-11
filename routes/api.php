@@ -14,3 +14,4 @@ require __DIR__.'/api/service.php';
 require __DIR__.'/api/schedule.php';
 require __DIR__.'/api/availability.php';
 require __DIR__.'/api/reference.php';
+require __DIR__.'/api/user.php';

@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Account;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Account\ChangePasswordRequest;
 use App\Http\Requests\Account\DeleteAccountRequest;
+use App\Http\Requests\Account\UpdateDietaryPreferencesRequest;
+use App\Http\Requests\Account\UpdateNotificationPreferencesRequest;
 use App\Http\Requests\Account\UpdateProfileRequest;
 use App\Http\Resources\UserResource;
 use Illuminate\Http\Response;
@@ -17,6 +19,23 @@ class ProfileController extends Controller
     {
         $user = $request->user();
         $user->update($request->validated());
+
+        return UserResource::make($user->load('roles'));
+    }
+
+    public function updateDietaryPreferences(UpdateDietaryPreferencesRequest $request): UserResource
+    {
+        $user = $request->user();
+        $user->update($request->validated());
+
+        return UserResource::make($user->load('roles'));
+    }
+
+    public function updateNotificationPreferences(UpdateNotificationPreferencesRequest $request): UserResource
+    {
+        $user = $request->user();
+        $merged = array_merge($user->notificationPreferences(), $request->validated());
+        $user->update(['notification_preferences' => $merged]);
 
         return UserResource::make($user->load('roles'));
     }

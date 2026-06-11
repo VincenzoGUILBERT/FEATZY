@@ -1,7 +1,10 @@
 <?php
 
+use App\Enums\DayOfWeek;
 use App\Models\CuisineType;
 use App\Models\Restaurant;
+use App\Models\Service;
+use App\Models\ServiceSchedule;
 
 beforeEach(function () {
     $this->withHeader('Origin', config('app.frontend_url'));
@@ -134,4 +137,31 @@ it('omits is_favorited for anonymous visitors', function () {
     $this->getJson("/api/discovery/restaurants/{$restaurant->id}")
         ->assertOk()
         ->assertJsonMissingPath('data.is_favorited');
+});
+
+it('exposes opening hours derived from active services schedules', function () {
+    $restaurant = Restaurant::factory()->published()->create();
+    $service = Service::factory()->for($restaurant)->create(['name' => 'Déjeuner']);
+    ServiceSchedule::factory()->for($service)
+        ->onDay(DayOfWeek::Monday)
+        ->window('12:00:00', '13:30:00', '15:00:00')
+        ->create();
+
+    $this->getJson("/api/discovery/restaurants/{$restaurant->id}")
+        ->assertOk()
+        ->assertJsonPath('data.opening_hours.0.day_of_week', 1)
+        ->assertJsonPath('data.opening_hours.0.day_name', 'Lundi')
+        ->assertJsonPath('data.opening_hours.0.opens_at', '12:00:00')
+        ->assertJsonPath('data.opening_hours.0.closes_at', '15:00:00')
+        ->assertJsonPath('data.opening_hours.0.service_name', 'Déjeuner');
+});
+
+it('excludes inactive services from opening hours', function () {
+    $restaurant = Restaurant::factory()->published()->create();
+    $service = Service::factory()->inactive()->for($restaurant)->create();
+    ServiceSchedule::factory()->for($service)->create();
+
+    $this->getJson("/api/discovery/restaurants/{$restaurant->id}")
+        ->assertOk()
+        ->assertJsonCount(0, 'data.opening_hours');
 });

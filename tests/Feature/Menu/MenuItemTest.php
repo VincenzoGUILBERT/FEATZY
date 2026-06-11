@@ -81,6 +81,22 @@ it('updates a menu item', function () {
         ->assertJsonPath('data.is_available', false);
 });
 
+it('derives is_sold_out from the tracked stock', function () {
+    $owner = actingAsRestaurateur();
+    $restaurant = Restaurant::factory()->for($owner, 'owner')->create();
+    $category = MenuCategory::factory()->for($restaurant)->create();
+    $item = MenuItem::factory()->for($category, 'category')->create(['stock_quantity' => null]);
+
+    $this->getJson("/api/menu-items/{$item->id}")
+        ->assertOk()
+        ->assertJsonPath('data.is_sold_out', false);
+
+    $this->patchJson("/api/menu-items/{$item->id}", ['stock_quantity' => 0])
+        ->assertOk()
+        ->assertJsonPath('data.stock_quantity', 0)
+        ->assertJsonPath('data.is_sold_out', true);
+});
+
 it('shows a menu item with its relations', function () {
     $owner = actingAsRestaurateur();
     $restaurant = Restaurant::factory()->for($owner, 'owner')->create();

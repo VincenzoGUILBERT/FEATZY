@@ -22,6 +22,7 @@ class MenuItemOptionResource extends JsonResource
             'name' => $this->name,
             'price_delta' => $this->price_delta,
             'stock_quantity' => $this->stock_quantity,
+            'is_sold_out' => $this->is_sold_out,
             'is_available' => $this->is_available,
             'position' => $this->position,
         ];

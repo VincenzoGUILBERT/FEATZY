@@ -22,7 +22,11 @@ class FavoriteController extends Controller
         $restaurants = $user->favoriteRestaurants()
             ->published()
             ->withExists(['favorites as is_favorited' => fn ($query) => $query->where('user_id', $user->id)])
-            ->with(['cuisineTypes', 'media'])
+            ->with([
+                'cuisineTypes',
+                'media',
+                'services' => fn ($query) => $query->where('is_active', true)->with('schedules'),
+            ])
             ->orderByPivot('created_at', 'desc')
             ->paginate()
             ->appends($request->query());

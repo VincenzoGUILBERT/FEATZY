@@ -47,6 +47,27 @@ it('hides inactive categories and unavailable items', function () {
         ->assertJsonCount(0, 'data.0.menu_items');
 });
 
+it('keeps sold-out items visible and exposes the derived flag', function () {
+    $restaurant = Restaurant::factory()->published()->create();
+    $category = MenuCategory::factory()->for($restaurant)->create(['is_active' => true, 'position' => 1]);
+    $soldOut = MenuItem::factory()->for($restaurant)->for($category, 'category')
+        ->create(['is_available' => true, 'position' => 1, 'stock_quantity' => 0, 'name' => 'Sold out']);
+    MenuItem::factory()->for($restaurant)->for($category, 'category')
+        ->create(['is_available' => true, 'position' => 2, 'stock_quantity' => 3, 'name' => 'In stock']);
+    MenuItem::factory()->for($restaurant)->for($category, 'category')
+        ->create(['is_available' => true, 'position' => 3, 'stock_quantity' => null, 'name' => 'Unlimited']);
+    $group = MenuItemOptionGroup::factory()->for($soldOut, 'menuItem')->create(['position' => 1]);
+    MenuItemOption::factory()->for($group, 'group')->create(['stock_quantity' => 0, 'position' => 1]);
+
+    $this->getJson("/api/discovery/restaurants/{$restaurant->id}/menu")
+        ->assertOk()
+        ->assertJsonCount(3, 'data.0.menu_items')
+        ->assertJsonPath('data.0.menu_items.0.is_sold_out', true)
+        ->assertJsonPath('data.0.menu_items.1.is_sold_out', false)
+        ->assertJsonPath('data.0.menu_items.2.is_sold_out', false)
+        ->assertJsonPath('data.0.menu_items.0.option_groups.0.options.0.is_sold_out', true);
+});
+
 it('orders the menu tree by position', function () {
     $restaurant = Restaurant::factory()->published()->create();
     MenuCategory::factory()->for($restaurant)->create(['is_active' => true, 'position' => 2, 'name' => 'Second']);

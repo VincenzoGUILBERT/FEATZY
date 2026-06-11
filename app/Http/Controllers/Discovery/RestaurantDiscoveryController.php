@@ -61,7 +61,11 @@ class RestaurantDiscoveryController extends Controller
             )
             ->allowedSorts(...$sorts)
             ->defaultSort($defaultSort)
-            ->with(['cuisineTypes', 'media'])
+            ->with([
+                'cuisineTypes',
+                'media',
+                'services' => fn ($query) => $query->where('is_active', true)->with('schedules'),
+            ])
             ->paginate()
             ->appends($request->query());
 
@@ -75,7 +79,11 @@ class RestaurantDiscoveryController extends Controller
     {
         abort_unless($restaurant->status === RestaurantStatus::Published, 404);
 
-        $restaurant->load(['cuisineTypes', 'media']);
+        $restaurant->load([
+            'cuisineTypes',
+            'media',
+            'services' => fn ($query) => $query->where('is_active', true)->with('schedules'),
+        ]);
 
         if ($user = $request->user()) {
             $restaurant->loadExists(['favorites as is_favorited' => fn ($query) => $query->where('user_id', $user->id)]);

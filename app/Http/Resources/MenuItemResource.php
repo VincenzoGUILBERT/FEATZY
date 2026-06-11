@@ -26,6 +26,7 @@ class MenuItemResource extends JsonResource
             'is_available' => $this->is_available,
             'position' => $this->position,
             'stock_quantity' => $this->stock_quantity,
+            'is_sold_out' => $this->is_sold_out,
             'preparation_minutes' => $this->preparation_minutes,
             'option_groups' => MenuItemOptionGroupResource::collection($this->whenLoaded('optionGroups')),
             'allergens' => AllergenResource::collection($this->whenLoaded('allergens')),
