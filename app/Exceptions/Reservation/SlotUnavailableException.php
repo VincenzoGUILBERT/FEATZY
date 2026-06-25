@@ -6,7 +6,7 @@ use App\Exceptions\DomainException;
 
 final class SlotUnavailableException extends DomainException
 {
-    public function __construct(string $message = 'The selected service slot is not available for booking.')
+    public function __construct(string $message = 'Ce créneau n\'est plus disponible, choisissez-en un autre.')
     {
         parent::__construct($message);
     }

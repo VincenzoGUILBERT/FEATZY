@@ -28,7 +28,7 @@ class AvailabilityController extends Controller
             ? $restaurant->services()->active()->findOrFail((int) $request->validated('service_id'))
             : null;
 
-        $availabilities = $availability->availability($restaurant, $date, $partySize, $service);
+        $availabilities = $availability->availability($restaurant, $date, $partySize, $service, $request->user());
 
         return AvailabilityResource::collection($availabilities);
     }

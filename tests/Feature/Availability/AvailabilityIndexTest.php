@@ -4,6 +4,7 @@ use App\Enums\ScheduleExceptionType;
 use App\Models\Reservation;
 use App\Models\Restaurant;
 use App\Models\Service;
+use App\Models\User;
 use Carbon\CarbonImmutable;
 
 beforeEach(function () {
@@ -109,6 +110,30 @@ it('returns empty slots for a service closed by an exception', function () {
         ->assertJsonPath('data.0.service.id', $service->id);
 
     expect($response->json('data.0.slots'))->toBe([]);
+});
+
+it('hides slots overlapping the authenticated user own reservations', function () {
+    $restaurant = Restaurant::factory()->published()->create();
+    $service = availabilityService($restaurant);
+
+    // L'utilisateur a déjà une réservation 12:00 → l'occupation chevauche ce créneau.
+    $user = User::factory()->client()->create();
+    Reservation::factory()
+        ->forSlot($service, CarbonImmutable::parse("{$this->date} 12:00:00"), 2)
+        ->create(['organizer_id' => $user->id]);
+
+    // Visiteur anonyme : le pacing laisse encore le créneau ouvert (2 ≤ max_covers_per_slot).
+    $anonymous = $this->getJson("/api/restaurants/{$restaurant->id}/availability?date={$this->date}&party_size=2")
+        ->assertOk();
+    expect(collect($anonymous->json('data.0.slots'))->pluck('time'))->toContain('12:00');
+
+    // Connecté en tant que cet utilisateur : le créneau qu'il ne pourrait pas réserver disparaît.
+    $this->actingAs($user);
+
+    $response = $this->getJson("/api/restaurants/{$restaurant->id}/availability?date={$this->date}&party_size=2")
+        ->assertOk();
+
+    expect(collect($response->json('data.0.slots'))->pluck('time'))->not->toContain('12:00');
 });
 
 it('filters by service_id to return a single service', function () {

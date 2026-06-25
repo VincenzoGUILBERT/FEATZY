@@ -18,13 +18,7 @@ use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
-/**
- * Réserve un créneau pour l'organisateur, sans surbooking. La disponibilité est calculée
- * à la volée (couverts simultanés par chevauchement + pacing par créneau) : il n'y a pas de
- * compteur à décrémenter. La vérification finale et l'insertion se font donc sous un verrou
- * sérialisant par POOL de capacité, à l'intérieur d'une transaction. L'organisateur est
- * persisté comme premier participant dans la même transaction.
- */
+
 class CreateReservationAction
 {
     public function __construct(private readonly AvailabilityService $availability) {}

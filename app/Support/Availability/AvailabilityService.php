@@ -7,6 +7,7 @@ use App\Models\Reservation;
 use App\Models\Restaurant;
 use App\Models\ScheduleException;
 use App\Models\Service;
+use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
@@ -27,9 +28,13 @@ class AvailabilityService
     /**
      * Disponibilités d'un restaurant à une date, par service.
      *
+     * Si $forUser est fourni, les créneaux qui chevaucheraient une réservation active de
+     * cet utilisateur sont masqués : ils seraient de toute façon refusés à la création
+     * (anti double-booking), donc les afficher induit en erreur.
+     *
      * @return Collection<int, array{service: Service, slots: list<CarbonImmutable>}>
      */
-    public function availability(Restaurant $restaurant, CarbonImmutable $date, int $partySize, ?Service $service = null): Collection
+    public function availability(Restaurant $restaurant, CarbonImmutable $date, int $partySize, ?Service $service = null, ?User $forUser = null): Collection
     {
         $services = $service !== null
             ? collect([$service])
@@ -39,10 +44,18 @@ class AvailabilityService
         // les méthodes effective* et dans poolReservations.
         $services->each(fn (Service $current) => $current->setRelation('restaurant', $restaurant));
 
+        $organizerReservations = $forUser !== null
+            ? $this->organizerReservations($forUser, $date)
+            : collect();
+
         return $services
             ->map(fn (Service $current): array => [
                 'service' => $current,
-                'slots' => $this->availableSlots($current, $date, $partySize),
+                'slots' => $this->withoutOrganizerConflicts(
+                    $this->availableSlots($current, $date, $partySize),
+                    $current,
+                    $organizerReservations,
+                ),
             ])
             ->values();
     }
@@ -224,6 +237,50 @@ class AvailabilityService
             ->occupying()
             ->whereBetween('reserved_at', [$lower, $upper])
             ->get(['reserved_at', 'ends_at', 'slot_at', 'party_size']);
+    }
+
+    /**
+     * Réservations actives de l'organisateur (tous restaurants confondus) autour de la date.
+     * Sert à masquer les créneaux qu'il ne pourrait pas réserver : la création applique le
+     * même filtre anti double-booking, sans restriction de restaurant.
+     *
+     * @return Collection<int, Reservation>
+     */
+    private function organizerReservations(User $organizer, CarbonImmutable $date): Collection
+    {
+        $lower = CarbonImmutable::parse($date->toDateString().' 00:00:00')->subDay();
+        $upper = CarbonImmutable::parse($date->toDateString().' 23:59:59')->addDay();
+
+        return Reservation::query()
+            ->where('organizer_id', $organizer->id)
+            ->occupying()
+            ->whereBetween('reserved_at', [$lower, $upper])
+            ->get(['reserved_at', 'ends_at']);
+    }
+
+    /**
+     * Retire les créneaux dont l'occupation [slot, slot + durée d'assise) chevaucherait une
+     * réservation existante de l'organisateur — ils seraient rejetés à la création.
+     *
+     * @param  list<CarbonImmutable>  $slots
+     * @param  Collection<int, Reservation>  $organizerReservations
+     * @return list<CarbonImmutable>
+     */
+    private function withoutOrganizerConflicts(array $slots, Service $service, Collection $organizerReservations): array
+    {
+        if ($organizerReservations->isEmpty()) {
+            return $slots;
+        }
+
+        $duration = $service->effectiveSeatingDuration();
+
+        return array_values(array_filter($slots, function (CarbonImmutable $slot) use ($duration, $organizerReservations): bool {
+            $end = $slot->addMinutes($duration);
+
+            return ! $organizerReservations->contains(
+                fn (Reservation $reservation): bool => $reservation->reserved_at->lessThan($end) && $reservation->ends_at->greaterThan($slot),
+            );
+        }));
     }
 
     /**
